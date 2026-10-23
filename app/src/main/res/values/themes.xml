@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.RestaurantBook" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#2E7D32</item>
+        <item name="android:windowBackground">#FAFAF7</item>
+    </style>
+</resources>
