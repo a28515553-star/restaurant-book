@@ -4,7 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ibrahim.routermanager.data.Client
+import com.ibrahim.routermanager.data.DeviceNotes
 import com.ibrahim.routermanager.data.RouterConfig
+import com.ibrahim.routermanager.data.RouterType
+import com.ibrahim.routermanager.drivers.ScanDriver
 import com.ibrahim.routermanager.data.RouterState
 import com.ibrahim.routermanager.data.RouterStore
 import com.ibrahim.routermanager.drivers.driver
@@ -25,7 +28,16 @@ enum class Action(val label: String) {
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = RouterStore(app)
 
-    private val _routers = MutableStateFlow(store.load())
+    private val notes = DeviceNotes(app)
+
+    private val _names = MutableStateFlow(notes.names())
+    val names: StateFlow<Map<String, String>> = _names
+
+    /** Devices seen before; null until the first successful scan, so the first run flags nothing as new. */
+    private val _known = MutableStateFlow(notes.known().takeIf { it.isNotEmpty() })
+    val known: StateFlow<Set<String>?> = _known
+
+    private val _routers = MutableStateFlow(store.load().ifEmpty { defaultRouters() })
     val routers: StateFlow<List<RouterConfig>> = _routers
 
     private val _states = MutableStateFlow<Map<String, RouterState>>(emptyMap())
@@ -35,7 +47,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val message: StateFlow<String?> = _message
 
     init {
+        if (store.load().isEmpty()) store.save(_routers.value)
         refresh()
+    }
+
+    /** First run: scan the Wi-Fi network the phone is on, no setup needed. */
+    private fun defaultRouters(): List<RouterConfig> {
+        val ip = ScanDriver.localIps().firstOrNull() ?: return emptyList()
+        val gateway = ip.substringBeforeLast('.') + ".1"
+        return listOf(RouterConfig("local", "شبكتي", gateway, RouterType.SCAN, "", ""))
+    }
+
+    fun rename(key: String, name: String) {
+        _names.update { if (name.isBlank()) it - key else it + (key to name.trim()) }
+        notes.saveNames(_names.value)
+    }
+
+    /** Marks every device currently listed as known, which clears the "جديد" badges. */
+    fun acceptAll() {
+        val keys = _states.value.values.flatMap { (it as? RouterState.Ok)?.clients.orEmpty() }.map { it.mac }.toSet()
+        _known.value = (_known.value.orEmpty() + keys)
+        notes.saveKnown(_known.value!!)
     }
 
     fun consumeMessage() {
@@ -57,6 +89,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .getOrElse { RouterState.Failed(it.message ?: it.javaClass.simpleName) }
         }
         _states.update { it + (router.id to state) }
+        if (_known.value == null && state is RouterState.Ok && state.clients.isNotEmpty()) acceptAll()
     }
 
     fun perform(action: Action, client: Client) {

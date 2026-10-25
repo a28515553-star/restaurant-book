@@ -53,6 +53,8 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(vm: MainViewModel = viewModel()) {
     val routers by vm.routers.collectAsStateWithLifecycle()
     val states by vm.states.collectAsStateWithLifecycle()
+    val names by vm.names.collectAsStateWithLifecycle()
+    val known by vm.known.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
@@ -72,7 +74,7 @@ private fun MainScreen(vm: MainViewModel = viewModel()) {
         },
     ) { pad ->
         if (tab == 0) {
-            DevicesScreen(routers, states, vm::refresh, vm::perform, Modifier.padding(pad))
+            DevicesScreen(routers, states, vm::refresh, vm::perform, names, known, vm::rename, vm::acceptAll, Modifier.padding(pad))
         } else {
             RoutersScreen(routers, vm::newId, vm::saveRouter, vm::deleteRouter, Modifier.padding(pad))
         }

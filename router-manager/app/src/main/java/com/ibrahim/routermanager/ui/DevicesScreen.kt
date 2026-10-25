@@ -1,5 +1,7 @@
 package com.ibrahim.routermanager.ui
 
+import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ibrahim.routermanager.data.Client
@@ -41,10 +44,19 @@ fun DevicesScreen(
     states: Map<String, RouterState>,
     onRefresh: () -> Unit,
     onAction: (Action, Client) -> Unit,
+    names: Map<String, String>,
+    known: Set<String>?,
+    onRename: (String, String) -> Unit,
+    onAcceptAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf<Pair<Action, Client>?>(null) }
+    var renaming by remember { mutableStateOf<Client?>(null) }
+    val context = LocalContext.current
+    val all = states.values.flatMap { (it as? RouterState.Ok)?.clients.orEmpty() }
+    fun isNew(c: Client) = known != null && c.mac !in known
+    val newCount = all.count { isNew(it) }
     val loading = states.values.any { it is RouterState.Loading }
     val total = states.values.sumOf { (it as? RouterState.Ok)?.clients?.size ?: 0 }
 
@@ -57,10 +69,18 @@ fun DevicesScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         )
         Text(
-            "إجمالي الأجهزة: $total",
+            "إجمالي الأجهزة: $total" + if (newCount > 0) "   •   جديد: $newCount" else "",
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val text = all.joinToString("\n") { "${names[it.mac] ?: it.name.ifEmpty { "-" }}  ${it.ip}  ${it.info}" }
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                context.startActivity(Intent.createChooser(send, "مشاركة القائمة"))
+            }) { Text("مشاركة القائمة") }
+            if (newCount > 0) OutlinedButton(onClick = onAcceptAll) { Text("اعتماد الجديد") }
+        }
         PullToRefreshBox(isRefreshing = loading, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (routers.isEmpty()) {
                 Text("أضف راوتراً من تبويب «الراوترات» أولاً", modifier = Modifier.padding(24.dp))
@@ -73,12 +93,31 @@ fun DevicesScreen(
                         val shown = state.clients.filter { it.matches(query) }
                             .sortedWith(compareBy({ !it.blocked }, { it.ip.padIpv4() }))
                         items(shown, key = { "${router.id}-${it.mac}" }) { c ->
-                            ClientRow(c, router.type.canControl) { a -> pending = a to c }
+                            ClientRow(
+                                c, router.type.canControl, names[c.mac], isNew(c),
+                                onClick = { renaming = c },
+                            ) { a -> pending = a to c }
                         }
                     }
                 }
             }
         }
+    }
+
+    renaming?.let { c ->
+        var text by remember(c.mac) { mutableStateOf(names[c.mac] ?: c.name) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("اسم الجهاز") },
+            text = {
+                Column {
+                    Text(listOf(c.ip, c.info).filter { it.isNotEmpty() }.joinToString("  •  "), style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(text, { text = it }, singleLine = true, label = { Text("مثلاً: جوال أحمد") })
+                }
+            },
+            confirmButton = { TextButton(onClick = { onRename(c.mac, text); renaming = null }) { Text("حفظ") } },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("إلغاء") } },
+        )
     }
 
     pending?.let { (action, client) ->
@@ -111,12 +150,24 @@ private fun RouterHeader(router: RouterConfig, state: RouterState?) {
 }
 
 @Composable
-private fun ClientRow(client: Client, canControl: Boolean, onAction: (Action) -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+private fun ClientRow(
+    client: Client,
+    canControl: Boolean,
+    customName: String?,
+    isNew: Boolean,
+    onClick: () -> Unit,
+    onAction: (Action) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(12.dp)) {
-            Text(client.title(), fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(customName ?: client.title(), fontWeight = FontWeight.SemiBold)
+                if (isNew) Text("جديد", color = OnlineGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+            }
             Text(
-                listOf(client.ip, client.mac.takeIf { canControl }).filterNotNull().filter { it.isNotEmpty() }.joinToString("  •  "),
+                listOf(client.ip, client.mac.takeIf { canControl || it != client.ip }, client.info,
+                    client.latencyMs.takeIf { it >= 0 }?.let { "${it}ms" })
+                    .filterNotNull().filter { it.isNotEmpty() }.joinToString("  •  "),
                 style = MaterialTheme.typography.bodySmall,
             )
             if (client.blocked) Text("محظور", color = BlockedRed, fontWeight = FontWeight.Bold)

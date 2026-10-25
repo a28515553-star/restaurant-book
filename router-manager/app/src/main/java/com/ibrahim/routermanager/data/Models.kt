@@ -21,6 +21,8 @@ data class Client(
     val ip: String,
     val name: String,
     val blocked: Boolean,
+    val info: String = "",
+    val latencyMs: Int = -1,
 )
 
 sealed interface RouterState {
