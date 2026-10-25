@@ -3,7 +3,7 @@ name: Build Router Manager APK
 on:
   push:
     branches: [main, ccr-ed5392ba-o51m1s]
-    paths: [router-manager/**]
+    paths: [router-manager/**, .github/workflows/build-router-apk.yml]
   workflow_dispatch:
 
 permissions:
