@@ -89,9 +89,11 @@ fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
             var refresh by remember { mutableIntStateOf(0) }
             val seen = remember(refresh) { BlockerService.lastSeen }
             val connected = remember(refresh) { BlockerService.connected }
+            val decision = remember(refresh) { BlockerService.lastDecision }
             Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("الخدمة: " + if (connected) "تعمل ✅" else "غير متصلة ❌ (فعّلها من إمكانية الوصول)")
                 Text("آخر تطبيق رصدته: ${seen ?: "لا شيء بعد، افتح تطبيقاً ثم اضغط تحديث"}")
+                if (decision != null) Text("القرار الأخير: $decision")
                 if (seen != null) Text("هل هو في قائمة الحجب؟ " + if (seen in prefs.blockedApps) "نعم ✅" else "لا ❌ (اختره من تبويب التطبيقات)")
             }
             OutlinedButton(onClick = { refresh++ }) { Text("تحديث") }
