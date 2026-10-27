@@ -39,6 +39,18 @@ jobs:
           name: salah-focus-apk
           path: salah-focus/salah-focus.apk
 
+      - name: Commit APK to the branch
+        if: github.ref != 'refs/heads/main'
+        working-directory: .
+        run: |
+          mkdir -p dist
+          cp salah-focus/salah-focus.apk dist/salah-focus.apk
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add dist/salah-focus.apk
+          git commit -m "build: salah-focus.apk [skip ci]" || exit 0
+          git push origin HEAD:${{ github.ref_name }}
+
       - name: Publish to release
         if: github.ref == 'refs/heads/main'
         env:
