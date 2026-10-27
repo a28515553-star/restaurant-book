@@ -55,8 +55,6 @@ fun HomeScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) LocationHelper.refresh(context, prefs) { if (it) onChanged() }
     }
-    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    val blockerOn = isBlockerEnabled(context)
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -101,23 +99,7 @@ fun HomeScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
             }
         }
 
-        if (!blockerOn) {
-            SectionCard("فعّل الحجب") {
-                Text(
-                    "لكي يعمل الحجب، فعّل «وقت الصلاة» من إعدادات إمكانية الوصول. التطبيق لا يقرأ محتوى الشاشة، فقط يعرف اسم التطبيق المفتوح.",
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Button(onClick = { openAccessibilitySettings(context) }) { Text("فتح إعدادات إمكانية الوصول") }
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= 33 && prefs.remindersEnabled) {
-            Button(
-                onClick = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("السماح بإشعارات التذكير") }
-        }
+        SetupGuide()
 
         SectionCard("مواقيت اليوم") {
             Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
