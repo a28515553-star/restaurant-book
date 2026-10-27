@@ -14,12 +14,14 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.salahfocus.app.core.LocationHelper
 import com.salahfocus.app.core.Notifier
 import com.salahfocus.app.core.Prefs
 import com.salahfocus.app.ui.AppsScreen
@@ -41,6 +43,12 @@ class MainActivity : ComponentActivity() {
                     rev++
                     Notifier.reschedule(this@MainActivity)
                 }
+                // Refresh the position on every launch so times follow the user around the world.
+                LaunchedEffect(Unit) {
+                    if (prefs.autoLocation && prefs.hasLocation) {
+                        LocationHelper.refresh(this@MainActivity, prefs) { if (it) changed() }
+                    }
+                }
                 Scaffold(
                     bottomBar = {
                         NavigationBar {
@@ -52,7 +60,7 @@ class MainActivity : ComponentActivity() {
                 ) { pad ->
                     Box(Modifier.padding(pad)) {
                         when (tab) {
-                            0 -> HomeScreen(prefs, rev)
+                            0 -> HomeScreen(prefs, rev, changed)
                             1 -> AppsScreen(prefs, changed)
                             else -> SettingsScreen(prefs, rev, changed)
                         }

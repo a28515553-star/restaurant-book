@@ -24,37 +24,12 @@ val METHODS = listOf(
     CalcMethod("mwl", "رابطة العالم الإسلامي", 18.0, 17.0, 0),
     CalcMethod("egypt", "الهيئة المصرية العامة للمساحة", 19.5, 17.5, 0),
     CalcMethod("karachi", "جامعة العلوم الإسلامية - كراتشي", 18.0, 18.0, 0),
-)
-
-data class City(val ar: String, val lat: Double, val lng: Double, val tz: String)
-
-val CITIES = listOf(
-    City("مكة المكرمة", 21.4225, 39.8262, "Asia/Riyadh"),
-    City("المدينة المنورة", 24.4686, 39.6142, "Asia/Riyadh"),
-    City("الرياض", 24.7136, 46.6753, "Asia/Riyadh"),
-    City("جدة", 21.5433, 39.1728, "Asia/Riyadh"),
-    City("الدمام", 26.4207, 50.0888, "Asia/Riyadh"),
-    City("أبها", 18.2164, 42.5053, "Asia/Riyadh"),
-    City("القاهرة", 30.0444, 31.2357, "Africa/Cairo"),
-    City("الإسكندرية", 31.2001, 29.9187, "Africa/Cairo"),
-    City("عمّان", 31.9454, 35.9284, "Asia/Amman"),
-    City("القدس", 31.7683, 35.2137, "Asia/Jerusalem"),
-    City("دمشق", 33.5138, 36.2765, "Asia/Damascus"),
-    City("بيروت", 33.8938, 35.5018, "Asia/Beirut"),
-    City("بغداد", 33.3152, 44.3661, "Asia/Baghdad"),
-    City("الكويت", 29.3759, 47.9774, "Asia/Kuwait"),
-    City("المنامة", 26.2285, 50.5860, "Asia/Bahrain"),
-    City("الدوحة", 25.2854, 51.5310, "Asia/Qatar"),
-    City("دبي", 25.2048, 55.2708, "Asia/Dubai"),
-    City("أبوظبي", 24.4539, 54.3773, "Asia/Dubai"),
-    City("مسقط", 23.5880, 58.3829, "Asia/Muscat"),
-    City("صنعاء", 15.3694, 44.1910, "Asia/Aden"),
-    City("الخرطوم", 15.5007, 32.5599, "Africa/Khartoum"),
-    City("طرابلس", 32.8872, 13.1913, "Africa/Tripoli"),
-    City("تونس", 36.8065, 10.1815, "Africa/Tunis"),
-    City("الجزائر", 36.7538, 3.0588, "Africa/Algiers"),
-    City("الرباط", 34.0209, -6.8416, "Africa/Casablanca"),
-    City("إسطنبول", 41.0082, 28.9784, "Europe/Istanbul"),
+    CalcMethod("isna", "أمريكا الشمالية (ISNA)", 15.0, 15.0, 0),
+    CalcMethod("gulf", "الخليج", 19.5, 0.0, 90),
+    CalcMethod("kuwait", "الكويت", 18.0, 17.5, 0),
+    CalcMethod("qatar", "قطر", 18.0, 0.0, 90),
+    CalcMethod("turkey", "تركيا (الديانت)", 18.0, 17.0, 0),
+    CalcMethod("singapore", "سنغافورة وماليزيا وإندونيسيا", 20.0, 18.0, 0),
 )
 
 /** Offline solar-position based prayer times (same maths as the classic PrayTimes.org algorithm). */
@@ -94,7 +69,8 @@ object PrayerCalc {
         val decl = sun(jd + t).decl
         val noon = midDay(jd, t)
         val term = (-sin(rad(angle)) - sin(rad(decl)) * sin(rad(lat))) / (cos(rad(decl)) * cos(rad(lat)))
-        val half = deg(acos(term.coerceIn(-1.0, 1.0))) / 15.0
+        if (term < -1.0 || term > 1.0) return Double.NaN // the sun never reaches this angle that day
+        val half = deg(acos(term)) / 15.0
         return noon + if (ccw) -half else half
     }
 
@@ -110,6 +86,28 @@ object PrayerCalc {
         lat: Double, lng: Double, tzId: String,
         method: CalcMethod, asrFactor: Int,
     ): Map<Prayer, Long> {
+        val solar = hours(year, month, day, lat, lng, method, asrFactor)
+            // Near the poles the sun may not reach the fajr/isha angle (or never set):
+            // fall back to the nearest latitude where it does, the usual practice.
+            ?: hours(year, month, day, 48.5 * if (lat < 0) -1 else 1, lng, method, asrFactor)
+            ?: error("cannot compute prayer times")
+        val tz = TimeZone.getTimeZone(tzId)
+        val midnight = Calendar.getInstance(tz).apply {
+            clear()
+            set(year, month - 1, day, 0, 0, 0)
+        }.timeInMillis
+        // The offset at noon keeps days that switch daylight saving time correct for most of the day.
+        val shift = tz.getOffset(midnight + 12 * 3_600_000L) / 3_600_000.0 - lng / 15.0
+        fun at(h: Double) = midnight + ((h + shift) * 3_600_000.0).toLong()
+        return Prayer.values().associateWith { at(solar.getValue(it)) }
+    }
+
+    /** Prayer times as local solar hours, or null if one cannot be computed at this latitude. */
+    private fun hours(
+        year: Int, month: Int, day: Int,
+        lat: Double, lng: Double,
+        method: CalcMethod, asrFactor: Int,
+    ): Map<Prayer, Double>? {
         val jd = julian(year, month, day) - lng / (15.0 * 24.0)
         var fajr = 5.0
         var dhuhr = 12.0
@@ -125,20 +123,13 @@ object PrayerCalc {
             else angleTime(jd, lat, method.ishaAngle, isha / 24, false)
         }
 
-        val tz = TimeZone.getTimeZone(tzId)
-        val midnight = Calendar.getInstance(tz).apply {
-            clear()
-            set(year, month - 1, day, 0, 0, 0)
-        }.timeInMillis
-        val shift = tz.getOffset(midnight) / 3_600_000.0 - lng / 15.0
-        fun at(h: Double) = midnight + ((h + shift) * 3_600_000.0).toLong()
-
-        return mapOf(
-            Prayer.FAJR to at(fajr),
-            Prayer.DHUHR to at(dhuhr),
-            Prayer.ASR to at(asr),
-            Prayer.MAGHRIB to at(maghrib),
-            Prayer.ISHA to at(isha),
+        val result = mapOf(
+            Prayer.FAJR to fajr,
+            Prayer.DHUHR to dhuhr,
+            Prayer.ASR to asr,
+            Prayer.MAGHRIB to maghrib,
+            Prayer.ISHA to isha,
         )
+        return if (result.values.any { it.isNaN() }) null else result
     }
 }

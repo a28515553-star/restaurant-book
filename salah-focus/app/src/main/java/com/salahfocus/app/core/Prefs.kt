@@ -1,6 +1,8 @@
 package com.salahfocus.app.core
 
 import android.content.Context
+import java.util.Locale
+import java.util.TimeZone
 
 val DEFAULT_SOCIAL_APPS = setOf(
     "com.facebook.katana", "com.facebook.lite", "com.facebook.orca", "com.facebook.mlite",
@@ -34,35 +36,67 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putStringSet("apps", v).apply()
 
     var methodId: String
-        get() = sp.getString("method", "ummalqura") ?: "ummalqura"
+        get() = sp.getString("method", null) ?: defaultMethodFor(Locale.getDefault().country)
         set(v) = sp.edit().putString("method", v).apply()
 
     var asrFactor: Int
         get() = sp.getInt("asr", 1)
         set(v) = sp.edit().putInt("asr", v).apply()
 
-    var placeName: String
-        get() = sp.getString("place", CITIES[2].ar) ?: CITIES[2].ar
-        private set(v) = sp.edit().putString("place", v).apply()
+    /** True once a city was picked or a location was found; until then times use a default place. */
+    val hasLocation: Boolean get() = sp.getBoolean("hasLocation", false)
 
-    var lat: Double
-        get() = sp.getFloat("lat", CITIES[2].lat.toFloat()).toDouble()
-        private set(v) = sp.edit().putFloat("lat", v.toFloat()).apply()
+    /** When true the timezone always follows the phone, so travelling keeps times correct. */
+    val autoLocation: Boolean get() = sp.getBoolean("auto", true)
 
-    var lng: Double
-        get() = sp.getFloat("lng", CITIES[2].lng.toFloat()).toDouble()
-        private set(v) = sp.edit().putFloat("lng", v.toFloat()).apply()
+    val placeName: String get() = sp.getString("place", DEFAULT_CITY.ar) ?: DEFAULT_CITY.ar
 
-    var tzId: String
-        get() = sp.getString("tz", CITIES[2].tz) ?: CITIES[2].tz
-        private set(v) = sp.edit().putString("tz", v).apply()
+    val lat: Double get() = sp.getFloat("lat", DEFAULT_CITY.lat.toFloat()).toDouble()
 
-    fun setPlace(name: String, lat: Double, lng: Double, tzId: String) {
-        this.placeName = name
-        this.lat = lat
-        this.lng = lng
-        this.tzId = tzId
+    val lng: Double get() = sp.getFloat("lng", DEFAULT_CITY.lng.toFloat()).toDouble()
+
+    val tzId: String
+        get() = if (autoLocation && hasLocation) TimeZone.getDefault().id
+        else sp.getString("tz", DEFAULT_CITY.tz) ?: DEFAULT_CITY.tz
+
+    fun setCity(city: City) {
+        sp.edit()
+            .putString("place", city.ar).putFloat("lat", city.lat.toFloat()).putFloat("lng", city.lng.toFloat())
+            .putString("tz", city.tz).putString("method", city.method)
+            .putBoolean("auto", false).putBoolean("hasLocation", true)
+            .apply()
+    }
+
+    fun setAutoLocation(lat: Double, lng: Double) {
+        val edit = sp.edit()
+            .putString("place", "موقعي الحالي").putFloat("lat", lat.toFloat()).putFloat("lng", lng.toFloat())
+            .putString("tz", TimeZone.getDefault().id)
+            .putBoolean("auto", true).putBoolean("hasLocation", true)
+        if (!sp.getBoolean("methodManual", false)) edit.putString("method", defaultMethodFor(Locale.getDefault().country))
+        edit.apply()
+    }
+
+    fun chooseMethod(id: String) {
+        sp.edit().putString("method", id).putBoolean("methodManual", true).apply()
     }
 
     val method: CalcMethod get() = METHODS.firstOrNull { it.id == methodId } ?: METHODS[0]
+
+    companion object {
+        val DEFAULT_CITY = CITIES[0]
+
+        /** Usual calculation method for the phone's country; falls back to the Muslim World League. */
+        fun defaultMethodFor(country: String): String = when (country) {
+            "SA" -> "ummalqura"
+            "EG" -> "egypt"
+            "KW" -> "kuwait"
+            "QA" -> "qatar"
+            "AE", "OM", "BH" -> "gulf"
+            "TR" -> "turkey"
+            "US", "CA" -> "isna"
+            "PK", "IN", "BD", "AF" -> "karachi"
+            "MY", "SG", "ID", "BN", "TH", "PH" -> "singapore"
+            else -> "mwl"
+        }
+    }
 }

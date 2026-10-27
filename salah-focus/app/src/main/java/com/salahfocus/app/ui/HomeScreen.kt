@@ -31,12 +31,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.salahfocus.app.core.LocationHelper
 import com.salahfocus.app.core.Prefs
 import com.salahfocus.app.core.Schedule
 import kotlinx.coroutines.delay
 
 @Composable
-fun HomeScreen(prefs: Prefs, rev: Int) {
+fun HomeScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -51,6 +52,9 @@ fun HomeScreen(prefs: Prefs, rev: Int) {
     val next = remember(rev, now / 1000) { Schedule.nextPrayer(prefs, now) }
     val today = remember(rev, now / 60_000) { Schedule.today(prefs, now) }
 
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) LocationHelper.refresh(context, prefs) { if (it) onChanged() }
+    }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     val blockerOn = isBlockerEnabled(context)
 
@@ -84,6 +88,17 @@ fun HomeScreen(prefs: Prefs, rev: Int) {
             }
             Spacer(Modifier.height(8.dp))
             Text(prefs.placeName, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp)
+        }
+
+        if (!prefs.hasLocation) {
+            SectionCard("حدد موقعك") {
+                Text(
+                    "لحساب مواقيت الصلاة بدقة في أي مكان بالعالم، حدد موقعك تلقائياً أو اختر مدينتك من الإعدادات.",
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(onClick = { locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }) { Text("تحديد موقعي تلقائياً") }
+            }
         }
 
         if (!blockerOn) {

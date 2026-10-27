@@ -1,12 +1,9 @@
 package com.salahfocus.app.ui
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -22,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -35,11 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.salahfocus.app.core.CITIES
+import com.salahfocus.app.core.LocationHelper
 import com.salahfocus.app.core.METHODS
 import com.salahfocus.app.core.Prefs
-import java.util.TimeZone
 
 @Composable
 fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
@@ -47,13 +44,16 @@ fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
     var cityPickerOpen by remember { mutableStateOf(false) }
     var gpsFailed by remember { mutableStateOf(false) }
 
-    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted && useDeviceLocation(context, prefs)) {
-            gpsFailed = false
-            onChanged()
-        } else gpsFailed = true
+    var query by remember { mutableStateOf("") }
+    val findLocation = {
+        LocationHelper.refresh(context, prefs) { ok ->
+            gpsFailed = !ok
+            if (ok) onChanged()
+        }
     }
-
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) findLocation() else gpsFailed = true
+    }
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -87,37 +87,47 @@ fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
         }
 
         SectionCard("الموقع") {
-            Text("الموقع الحالي: ${prefs.placeName}", modifier = Modifier.padding(vertical = 8.dp))
+            Text(
+                "الموقع الحالي: ${prefs.placeName}" + if (prefs.autoLocation) " (تلقائي، يتبع منطقة جوالك الزمنية)" else "",
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { cityPickerOpen = !cityPickerOpen }) { Text("اختيار مدينة") }
-                OutlinedButton(onClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                        if (useDeviceLocation(context, prefs)) { gpsFailed = false; onChanged() } else gpsFailed = true
-                    } else locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                }) { Text("موقعي الحالي") }
+                Button(onClick = {
+                    if (LocationHelper.hasPermission(context)) findLocation()
+                    else locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                }) { Text("تحديد موقعي تلقائياً") }
+                OutlinedButton(onClick = { cityPickerOpen = !cityPickerOpen }) { Text("اختيار مدينة") }
             }
-            if (gpsFailed) Text("تعذّر تحديد موقعك، اختر مدينة يدوياً.", modifier = Modifier.padding(top = 8.dp))
+            if (gpsFailed) Text("تعذّر تحديد موقعك، فعّل الموقع في الجوال أو اختر مدينة يدوياً.", modifier = Modifier.padding(top = 8.dp))
             if (cityPickerOpen) {
-                CITIES.forEach { c ->
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    label = { Text("ابحث عن مدينة") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                val shown = CITIES.filter { query.isBlank() || it.ar.contains(query.trim()) }
+                shown.forEach { c ->
                     Text(
                         c.ar,
                         modifier = Modifier.fillMaxWidth().clickable {
-                            prefs.setPlace(c.ar, c.lat, c.lng, c.tz)
+                            prefs.setCity(c)
                             cityPickerOpen = false
+                            query = ""
                             onChanged()
                         }.padding(vertical = 10.dp),
                     )
                 }
+                if (shown.isEmpty()) Text("لا توجد نتائج. جرّب «تحديد موقعي تلقائياً» لأي مكان في العالم.", modifier = Modifier.padding(top = 8.dp))
             }
         }
 
         SectionCard("طريقة الحساب") {
             METHODS.forEach { m ->
                 Row(
-                    Modifier.fillMaxWidth().clickable { prefs.methodId = m.id; onChanged() },
+                    Modifier.fillMaxWidth().clickable { prefs.chooseMethod(m.id); onChanged() },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    RadioButton(prefs.methodId == m.id, { prefs.methodId = m.id; onChanged() })
+                    RadioButton(prefs.methodId == m.id, { prefs.chooseMethod(m.id); onChanged() })
                     Text(m.ar)
                 }
             }
@@ -146,14 +156,3 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 
 private fun canExact(context: Context): Boolean =
     (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
-
-/** Uses the last known location (no continuous tracking). Returns false if none is available. */
-@SuppressLint("MissingPermission")
-private fun useDeviceLocation(context: Context, prefs: Prefs): Boolean {
-    val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    val loc = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER)
-        .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
-        .maxByOrNull { it.time } ?: return false
-    prefs.setPlace("موقعي الحالي", loc.latitude, loc.longitude, TimeZone.getDefault().id)
-    return true
-}
