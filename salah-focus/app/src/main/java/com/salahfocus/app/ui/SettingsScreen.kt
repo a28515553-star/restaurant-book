@@ -26,6 +26,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.salahfocus.app.core.BlockerService
 import com.salahfocus.app.core.CITIES
 import com.salahfocus.app.core.LocationHelper
 import com.salahfocus.app.core.METHODS
@@ -81,6 +83,18 @@ fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
             Button(onClick = { prefs.testUntil = System.currentTimeMillis() + 2 * 60_000L; onChanged() }) {
                 Text("ابدأ تجربة الحجب (دقيقتان)")
             }
+        }
+
+        SectionCard("تشخيص الحجب") {
+            var refresh by remember { mutableIntStateOf(0) }
+            val seen = remember(refresh) { BlockerService.lastSeen }
+            val connected = remember(refresh) { BlockerService.connected }
+            Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("الخدمة: " + if (connected) "تعمل ✅" else "غير متصلة ❌ (فعّلها من إمكانية الوصول)")
+                Text("آخر تطبيق رصدته: ${seen ?: "لا شيء بعد، افتح تطبيقاً ثم اضغط تحديث"}")
+                if (seen != null) Text("هل هو في قائمة الحجب؟ " + if (seen in prefs.blockedApps) "نعم ✅" else "لا ❌ (اختره من تبويب التطبيقات)")
+            }
+            OutlinedButton(onClick = { refresh++ }) { Text("تحديث") }
         }
 
         SectionCard("التذكير") {
