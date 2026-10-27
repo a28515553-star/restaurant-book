@@ -29,7 +29,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.salahfocus.app.core.Prayer
 import com.salahfocus.app.ui.Gold
 import com.salahfocus.app.ui.SalahTheme
 import com.salahfocus.app.ui.Teal
@@ -45,21 +44,21 @@ class BlockActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prayer = intent.getStringExtra("prayer")?.let { runCatching { Prayer.valueOf(it) }.getOrNull() }
+        val label = intent.getStringExtra("label") ?: ""
         val end = intent.getLongExtra("end", 0L)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = goHome()
         })
         setContent {
             SalahTheme {
-                BlockScreen(prayer?.ar ?: "", end, onHome = ::goHome, onDone = ::finish)
+                BlockScreen(label, end, onHome = ::goHome, onDone = ::finish)
             }
         }
     }
 }
 
 @Composable
-private fun BlockScreen(prayerName: String, end: Long, onHome: () -> Unit, onDone: () -> Unit) {
+private fun BlockScreen(label: String, end: Long, onHome: () -> Unit, onDone: () -> Unit) {
     var left by remember { mutableLongStateOf(end - System.currentTimeMillis()) }
     LaunchedEffect(end) {
         while (true) {
@@ -78,7 +77,7 @@ private fun BlockScreen(prayerName: String, end: Long, onHome: () -> Unit, onDon
     ) {
         Text("🕌", fontSize = 64.sp)
         Spacer(Modifier.height(16.dp))
-        Text("وقت صلاة $prayerName", color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text("برامج التواصل محجوبة الآن", color = Color.White, fontSize = 18.sp)
         Spacer(Modifier.height(32.dp))

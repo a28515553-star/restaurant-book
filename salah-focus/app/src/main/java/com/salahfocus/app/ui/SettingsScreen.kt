@@ -73,6 +73,16 @@ fun SettingsScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
             )
         }
 
+        SectionCard("تجربة الحجب") {
+            Text(
+                "الحجب يعمل فقط داخل وقت الصلاة. لتتأكد أنه يعمل الآن، شغّل تجربة مدتها دقيقتان ثم افتح أحد البرامج المحجوبة.",
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+            Button(onClick = { prefs.testUntil = System.currentTimeMillis() + 2 * 60_000L; onChanged() }) {
+                Text("ابدأ تجربة الحجب (دقيقتان)")
+            }
+        }
+
         SectionCard("التذكير") {
             SwitchRow("إشعارات قبل الصلاة وعند الأذان وبعدها", prefs.remindersEnabled) { prefs.remindersEnabled = it; onChanged() }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !canExact(context)) {

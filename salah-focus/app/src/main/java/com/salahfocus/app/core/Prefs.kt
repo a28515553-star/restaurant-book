@@ -23,6 +23,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("reminders", true)
         set(v) = sp.edit().putBoolean("reminders", v).apply()
 
+    /** Epoch millis until which a manual test block is active (0 = none). */
+    var testUntil: Long
+        get() = sp.getLong("testUntil", 0L)
+        set(v) = sp.edit().putLong("testUntil", v).apply()
+
     var minutesBefore: Int
         get() = sp.getInt("before", 10)
         set(v) = sp.edit().putInt("before", v).apply()

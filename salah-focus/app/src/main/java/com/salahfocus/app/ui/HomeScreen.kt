@@ -68,7 +68,7 @@ fun HomeScreen(prefs: Prefs, rev: Int, onChanged: () -> Unit) {
             if (active != null) {
                 Text("برامج التواصل محجوبة الآن", color = Gold, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.height(4.dp))
-                Text("وقت صلاة ${active.prayer.ar}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text(active.label, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "تُفتح بعد ${formatCountdown(active.end - now)} (${formatTime(active.end, tz)})",
                     color = Color.White.copy(alpha = 0.8f),

@@ -4,7 +4,9 @@ import java.util.Calendar
 import java.util.TimeZone
 
 /** One prayer with the window in which social apps are blocked: [start, end). */
-data class PrayerEvent(val prayer: Prayer, val time: Long, val start: Long, val end: Long)
+data class PrayerEvent(val prayer: Prayer, val time: Long, val start: Long, val end: Long, val test: Boolean = false) {
+    val label: String get() = if (test) "تجربة الحجب" else "وقت صلاة ${prayer.ar}"
+}
 
 enum class AlertType { START, TIME, END }
 
@@ -34,8 +36,10 @@ object Schedule {
     }
 
     /** The event whose block window contains [now], if any. */
-    fun activeEvent(prefs: Prefs, now: Long): PrayerEvent? =
-        events(prefs, now).firstOrNull { now >= it.start && now < it.end }
+    fun activeEvent(prefs: Prefs, now: Long): PrayerEvent? {
+        if (now < prefs.testUntil) return PrayerEvent(Prayer.FAJR, prefs.testUntil, now, prefs.testUntil, test = true)
+        return events(prefs, now).firstOrNull { now >= it.start && now < it.end }
+    }
 
     /** First prayer whose time is still ahead of [now]. */
     fun nextPrayer(prefs: Prefs, now: Long): PrayerEvent? =
