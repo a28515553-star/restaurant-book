@@ -14,6 +14,8 @@
   };
 
   let valHtml = '';
+  let cfg = store.get('cfg', { preset: 'sr', req: ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'], min: 0 });
+  const activeReq = () => (cfg.preset === 'custom' ? cfg.req : (Analysis.PRESETS[cfg.preset].req || []));
   let rows = [], live = {}, tab = 'enter', sortKey = 'flow', sortDir = -1, detailSym = null;
   let ws1 = null, ws2 = null, timer = null, prevState = {}, firstScan = true, lastSig = '', batchOut = null, scanning = false;
   let positions = store.get('pos', []), history = store.get('hist', []);
@@ -69,7 +71,7 @@
       await pool(pick, 6, async (t) => {
         try {
           const cs = await getKlines(t.symbol, tf, 300);
-          const a = Analysis.analyze(cs);
+          const a = Analysis.analyze(cs, { cfg });
           if (a) out.push({ symbol: t.symbol, price: +t.lastPrice, chg: +t.priceChangePercent, a, cs,
             flow: a.inflow.score, relVol: a.inflow.relVol, buy: a.inflow.buyRatio, signal: a.signal, score: a.score });
         } catch (e) { /* نتجاهل عملة فشل جلبها */ }
@@ -335,24 +337,27 @@
     $('ov').innerHTML = `<div class="hd" style="justify-content:space-between"><div class="hd"><span class="nm">${name(sym)}/USDT</span>
       <span class="tag ${r.signal}">${LBL[r.signal]}</span><span class="up sm" id="lp">● ${fmt(r.price)}</span></div><button data-a="back">رجوع ✕</button></div>
       <canvas id="cv" style="margin-top:10px"></canvas>
+      <canvas id="cv2" style="height:300px;margin-top:6px"></canvas>
       ${p ? `<div class="lv"><div class="kv"><span>دخول (حتى)</span><b>${fmt(p.entry)} → ${fmt(p.maxEntry)}</b></div><div class="kv"><span>وقف</span><b class="dn">${fmt(p.stop)}</b></div>
         ${p.targets.map((t, i) => `<div class="kv"><span>هدف ${i + 1} · ${t.kind}</span><b class="up">${fmt(t.price)}</b><span>${t.rr.toFixed(1)}R · ${pct(t.prob, 0)}</span></div>`).join('')}</div>` : '<div class="mut">لا توجد خطة دخول حالياً.</div>'}
       <div class="lv"><div class="kv"><span>POC</span><b>${fmt(vp.poc)}</b></div><div class="kv"><span>VAH / VAL</span><b>${fmt(vp.vah)} / ${fmt(vp.val)}</b></div>
         <div class="kv"><span>RSI · ATR</span><b>${a.rsi.toFixed(0)} · ${pct(a.atrPct)}</b></div>
         <div class="kv"><span>صافي شراء Taker</span><b class="${a.inflow.netInflow >= 0 ? 'up' : 'dn'}">${a.inflow.netInflow >= 0 ? '+' : '-'}${money(a.inflow.netInflow)}</b></div></div>
+      <b>شروط الاستراتيجية (${Analysis.PRESETS[cfg.preset].name})</b>
+      ${a.conds.map((c) => `<div class="cond ${activeReq().includes(c.id) && cfg.preset !== 'sr' ? 'req' : 'mut'}"><i class="${c.ok ? 'up' : 'dn'}">${c.ok ? '✓' : '✗'}</i><span>${activeReq().includes(c.id) && cfg.preset !== 'sr' ? '<b>' + c.label + '</b>' : c.label}</span></div>`).join('')}
       <b>الأسباب</b><ul>${a.reasons.map((x) => `<li>${x}</li>`).join('') || '<li class="mut">—</li>'}</ul>
       ${a.warns.length ? `<b>تنبيهات</b><ul class="warn">${a.warns.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
       <div class="act"><button data-a="bt1" data-s="${sym}">باك تست هذه العملة</button></div><div id="btres"></div>
       <div class="note">احتمال اللمس تقدير إحصائي (أفق ${a.horizon} شمعة) وليس وعداً. أداة تحليل وليست نصيحة مالية.</div>`;
     $('ov').classList.add('on');
-    drawChart($('cv'), r.cs, a, r.price);
+    drawChart($('cv'), r.cs, a, r.price); drawPanes($('cv2'), a);
   }
 
   async function runBacktest1(sym) {
     const el = $('btres'); el.innerHTML = '<div class="mut">جلب البيانات وتشغيل الباك تست...</div>';
     try {
       const cs = await getKlines(sym, $('tf').value, 1000);
-      const b = Analysis.backtest(cs, { tp: 2 });
+      const b = Analysis.backtest(cs, { tp: 2, cfg });
       el.innerHTML = `<div class="lv"><div class="kv"><span>الصفقات</span><b>${b.count}</b></div><div class="kv"><span>النجاح</span><b>${pct(b.winRate, 0)}</b></div>
         <div class="kv"><span>متوسط الصفقة</span><b class="${b.avgR >= 0 ? 'up' : 'dn'}">${b.avgR.toFixed(2)}R</b></div><div class="kv"><span>المجموع / أقصى تراجع</span><b>${b.totalR.toFixed(1)}R / ${b.maxDD.toFixed(1)}R</b></div></div>
         <div class="mut sm">${b.count < 20 ? 'عدد الصفقات قليل، النتيجة غير موثوقة. ' : ''}الأداء السابق لا يضمن المستقبل.</div>`;
@@ -367,7 +372,7 @@
       try {
         const cs = await getKlines(r.symbol, $('tf').value, 1000);
         await new Promise((res) => setTimeout(res, 0));
-        out.push({ r, b: Analysis.backtest(cs, { tp: 2 }) });
+        out.push({ r, b: Analysis.backtest(cs, { tp: 2, cfg }) });
       } catch (e) { /* تجاهل */ }
       setStatus(`باك تست شامل ${++done}/${list.length}...`);
     });
@@ -403,6 +408,34 @@
       <div class="tbl"><table><thead><tr><th>الدرجة</th>${H.map((h) => `<th>بعد ${h}</th>`).join('')}</tr></thead><tbody>${rowsB}</tbody></table></div>
       <div class="note">t أكبر من 2 تعني أن الفرق غالباً ليس صدفة. الأحداث تُحسب بفاصل أفق كامل بينها لتقليل التداخل، لكن العملات ترتبط ببعضها، فاعتبر t تقريبياً. أداء الماضي لا يضمن المستقبل.</div>`;
     setStatus('اكتمل اختبار السيولة.'); lastSig = ''; render();
+  }
+
+  // لوحات المؤشرات تحت الرسم: ستوكاستك / RSI(8) / MACD — بنفس محور الشموع
+  function drawPanes(cv, a) {
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext('2d'); g.scale(dpr, dpr);
+    const S = a.series, N = S.k.length, padR = 64, vpW = Math.min(110, W * 0.22), plotW = W - padR - vpW, ph = H / 3;
+    const xx = (i) => vpW + (i + 0.5) * (plotW / N);
+    g.font = '11px sans-serif';
+    const pane = (idx, title, lines, lo, hi, levels, bg) => {
+      const y0 = idx * ph + 14, y1 = (idx + 1) * ph - 4, y = (v) => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+      g.fillStyle = bg; g.fillRect(vpW, idx * ph + 1, plotW, ph - 2);
+      g.strokeStyle = 'rgba(132,142,156,.45)'; g.lineWidth = 1; g.setLineDash([3, 4]);
+      levels.forEach((l) => { g.beginPath(); g.moveTo(vpW, y(l)); g.lineTo(vpW + plotW, y(l)); g.stroke(); });
+      g.setLineDash([]);
+      lines.forEach(({ v, c }) => {
+        g.strokeStyle = c; g.lineWidth = 1.4; g.beginPath(); let on = false;
+        v.forEach((val, i) => { if (!isFinite(val)) return; if (on) g.lineTo(xx(i), y(val)); else { g.moveTo(xx(i), y(val)); on = true; } });
+        g.stroke();
+      });
+      g.fillStyle = '#848e9c'; g.textAlign = 'left'; g.fillText(title, vpW + 4, idx * ph + 12);
+      lines.forEach(({ v, c }, k) => { const val = v[v.length - 1]; if (isFinite(val)) { g.fillStyle = c; g.fillText(val.toFixed(Math.abs(val) < 1 ? 4 : 1), W - padR + 4, idx * ph + 14 + k * 13); } });
+    };
+    pane(0, 'Stoch (14,3,3)  تشبع 20/80', [{ v: S.k, c: '#4a90d9' }, { v: S.d, c: '#f0b90b' }], 0, 100, [20, 80], 'rgba(100,140,255,.07)');
+    pane(1, 'RSI (8)  خط 50', [{ v: S.r8, c: '#f6465d' }, { v: S.r8ma, c: '#848e9c' }], 0, 100, [50], 'rgba(80,160,255,.07)');
+    const m = [...S.macd, ...S.sig].filter(isFinite), mx = Math.max(1e-12, ...m.map(Math.abs));
+    pane(2, 'MACD (10,26,9)', [{ v: S.macd, c: '#f6465d' }, { v: S.sig, c: '#9b59ff' }], -mx, mx, [0], 'rgba(246,70,93,.06)');
   }
 
   function drawChart(cv, all, a, livePrice) {
@@ -459,6 +492,25 @@
     ws1.onclose = () => { ws1 = null; setTimeout(startLive, 3000); };
   }
 
+  /* ---------- الاستراتيجية ودمج المؤشرات ---------- */
+  function reanalyze() {
+    for (const r of rows) {
+      const a = Analysis.analyze(r.cs, { cfg });
+      if (a) Object.assign(r, { a, flow: a.inflow.score, relVol: a.inflow.relVol, buy: a.inflow.buyRatio, signal: a.signal, score: a.score });
+    }
+    firstScan = true; checkAlerts(); // نحدّث الحالة بصمت دون تنبيهات
+    batchOut = null; lastSig = ''; render();
+    if (detailSym) showDetail(detailSym);
+  }
+  function buildMix() {
+    const req = activeReq(), off = cfg.preset === 'sr';
+    $('preset').value = cfg.preset;
+    $('mixbox').innerHTML = (off ? '<div class="mut sm">الاستراتيجية الأصلية تقرر بمنطقها الخاص. اختر TraderDNA أو الدمج أو «مخصص» لتحديد الشروط.</div>' : '')
+      + Analysis.CONDITION_LIST.map((c) => `<label class="mixrow"><input type="checkbox" data-c="${c.id}" ${req.includes(c.id) ? 'checked' : ''} ${off ? 'disabled' : ''}>${c.label}</label>`).join('')
+      + `<label class="mixrow">الحد الأدنى للشروط المتحققة <input id="mixmin" type="number" min="0" max="8" value="${cfg.min || 0}" style="width:60px" ${off ? 'disabled' : ''}> <span class="mut sm">(0 = كل الشروط المحددة. مثلاً 3 من 5 يعطي إشارات أكثر وأقل دقة)</span></label>`;
+  }
+  function applyCfg() { store.set('cfg', cfg); buildMix(); reanalyze(); }
+
   /* ---------- أحداث ---------- */
   $('view').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-k]');
@@ -481,12 +533,19 @@
     else if (el.dataset.a === 'bt1') runBacktest1(el.dataset.s);
   });
   $('tabs').onclick = (e) => { const b = e.target.closest('button[data-t]'); if (b) { tab = b.dataset.t; render(); } };
+  $('preset').onchange = (e) => { cfg = { preset: e.target.value, req: cfg.req && cfg.req.length ? cfg.req : ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'], min: 0 }; applyCfg(); };
+  $('mixbox').onchange = (e) => {
+    if (e.target.id === 'mixmin') { cfg.min = Math.max(0, +e.target.value || 0); applyCfg(); return; }
+    if (!e.target.dataset.c) return;
+    const req = [...document.querySelectorAll('#mixbox input[data-c]')].filter((x) => x.checked).map((x) => x.dataset.c);
+    cfg = { preset: 'custom', req, min: cfg.min || 0 }; applyCfg();
+  };
   $('scan').onclick = scan;
   $('tf').onchange = () => { valHtml = ''; rows = []; prevState = {}; firstScan = true; batchOut = null; lastSig = ''; render(); setStatus('تغيّر الإطار الزمني. اضغط «فحص السوق».'); };
   $('alerts').onchange = (e) => { if (e.target.checked && window.Notification && Notification.permission === 'default') Notification.requestPermission(); beep(); };
   $('auto').onchange = (e) => { clearInterval(timer); if (e.target.checked) timer = setInterval(scan, 5 * 60 * 1000); store.set('auto', e.target.checked); };
   ['capital', 'risk'].forEach((id) => { $(id).value = store.get(id, $(id).value); $(id).onchange = () => { store.set(id, $(id).value); lastSig = ''; render(); }; });
   $('auto').checked = store.get('auto', true); $('auto').onchange({ target: $('auto') });
-  window.addEventListener('resize', () => { const r = rows.find((x) => x.symbol === detailSym); if (r && $('cv')) drawChart($('cv'), r.cs, r.a, r.price); });
-  startLive(); render(); scan();
+  window.addEventListener('resize', () => { const r = rows.find((x) => x.symbol === detailSym); if (r && $('cv')) { drawChart($('cv'), r.cs, r.a, r.price); drawPanes($('cv2'), r.a); } });
+  buildMix(); startLive(); render(); scan();
 })();

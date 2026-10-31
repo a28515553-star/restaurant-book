@@ -99,4 +99,32 @@ console.log('سيولة مع ميزة مزروعة:', withEdge.n, 'حدث، مت
 console.log('سيولة بدون ميزة      :', noEdge.n, 'حدث، متوسط', (noEdge.mean * 100).toFixed(2) + '%', 't =', noEdge.t.toFixed(1));
 assert(withEdge.n > 30 && withEdge.t > 3, 'يجب اكتشاف الميزة المزروعة');
 assert(Math.abs(noEdge.t) < 3, 'يجب ألا يخترع ميزة في بيانات عشوائية');
+// 8) مؤشرات TraderDNA
+const lin = Array.from({ length: 60 }, (_, i) => ({ h: 100 + i + 1, l: 100 + i - 1, c: 100 + i, o: 100 + i, v: 1, qv: 1, tbq: .5 }));
+const stc = A.stoch(lin); assert(stc.k[59] > 50 && stc.k[59] <= 100 && stc.d[59] <= 100, 'ستوكاستك ضمن 0-100');
+const lm = A.macd(lin.map((x) => x.c)); assert(lm.line[59] > 0 && isFinite(lm.sig[59]), 'MACD إيجابي في صعود خطي');
+assert(Math.abs(A.sma([1, 2, 3, 4], 2)[3] - 3.5) < 1e-9);
+// 9) الاستراتيجيات: sr لا تتغير، dna/combo/custom تحترم القواعد
+const base = A.analyze(cs), same = A.analyze(cs, { cfg: { preset: 'sr' } });
+assert.strictEqual(base.signal, same.signal); assert.strictEqual(base.score, same.score);
+let dnaBuys = 0, comboBuys = 0;
+for (const preset of ['dna', 'combo', 'custom']) {
+  for (let i = 250; i < 1000; i += 3) {
+    const cfg = { preset, req: ['dna_stoch', 'dna_rsi'], min: 0 };
+    const r = A.analyze(cs.slice(0, i), { cfg });
+    assert(r.conds.length === 8 && r.series.k.length > 0);
+    if (r.signal === 'BUY') {
+      const ids = preset === 'custom' ? cfg.req : A.PRESETS[preset].req;
+      ids.forEach((id) => assert(r.conds.find((c) => c.id === id).ok, preset + ' BUY يتطلب ' + id));
+      assert(r.plan.stop < r.plan.entry && r.plan.targets[0].price > r.plan.entry && r.plan.riskPct <= 0.08);
+      if (preset === 'dna') dnaBuys++; if (preset === 'combo') comboBuys++;
+    }
+  }
+}
+console.log('إشارات dna:', dnaBuys, ' combo:', comboBuys);
+assert(comboBuys <= dnaBuys, 'الدمج (شروط أكثر) لا يعطي إشارات أكثر من dna وحدها');
+// min: شرطان من ثلاثة أسهل من الثلاثة
+const cnt = (min) => { let c = 0; for (let i = 250; i < 1000; i += 3) if (A.analyze(cs.slice(0, i), { cfg: { preset: 'custom', req: ['dna_stoch', 'dna_rsi', 'dna_macd'], min } }).signal === 'BUY') c++; return c; };
+assert(cnt(2) >= cnt(3), 'خفض الحد الأدنى يزيد الإشارات');
+const btd = A.backtest(cs, { cfg: { preset: 'dna' } }); console.log('باك تست dna:', btd.count, 'صفقة');
 console.log('كل الاختبارات نجحت ✔');

@@ -21,6 +21,8 @@ button.bad{background:var(--dn);color:#fff;border-color:var(--dn);font-weight:70
 header{padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:6}
 .row1{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 h1{font-size:18px;margin:0 0 0 6px;color:var(--acc)}
+.mixrow{display:block;padding:4px 0;color:var(--tx)}.mixrow input{margin-inline-end:6px}#mixbox{padding:6px 0}
+.cond{display:flex;gap:8px;padding:4px 0}.cond i{font-style:normal;width:20px;flex:none}.cond.req b{color:var(--tx)}
 .sets{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:8px;color:var(--mut);font-size:13px}
 .sets input{width:84px;padding:5px 8px}
 details{margin-top:6px;color:var(--mut);font-size:13px}details input{width:70px;padding:4px 8px}
@@ -83,6 +85,15 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     <label>رأس المال $ <input id="capital" type="number" min="10" value="1000"></label>
     <label>المخاطرة لكل صفقة % <input id="risk" type="number" min="0.1" max="5" step="0.1" value="1"></label>
   </div>
+  <div class="sets">
+    <label>الاستراتيجية <select id="preset">
+      <option value="sr">الدعم والمقاومة + الفوليوم بروفايل</option>
+      <option value="dna">TraderDNA: ستوكاستك + RSI + MACD</option>
+      <option value="combo">دمج: TraderDNA + اتجاه + سيولة</option>
+      <option value="custom">مخصص (دمج المؤشرات بنفسك)</option>
+    </select></label>
+  </div>
+  <details id="mix"><summary>دمج المؤشرات (اختر الشروط التي يجب أن تتحقق معاً)</summary><div id="mixbox"></div></details>
   <details><summary>إعدادات الفحص</summary>
     <label>أدنى حجم 24س (مليون$) <input id="minVol" type="number" value="10" min="0"></label>
     <label>عدد العملات <input id="topN" type="number" value="60" min="10" max="150"></label>
@@ -304,6 +315,61 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
   }
 
   /* ---------- التحليل والإشارة ---------- */
+  /* ---------- مؤشرات TraderDNA: ستوكاستك + RSI(8) + MACD ---------- */
+  function sma(v, p) {
+    const out = new Array(v.length).fill(NaN);
+    for (let i = p - 1; i < v.length; i++) {
+      let ok = true, t = 0;
+      for (let j = i - p + 1; j <= i; j++) { if (!isFinite(v[j])) { ok = false; break; } t += v[j]; }
+      if (ok) out[i] = t / p;
+    }
+    return out;
+  }
+  // EMA على سلسلة قد تبدأ بقيم NaN
+  function emaSeries(v, p) {
+    const out = new Array(v.length).fill(NaN), k = 2 / (p + 1);
+    let f = v.findIndex((x) => isFinite(x)); if (f < 0 || v.length - f < p) return out;
+    let prev = mean(v.slice(f, f + p)); out[f + p - 1] = prev;
+    for (let i = f + p; i < v.length; i++) { prev = v[i] * k + prev * (1 - k); out[i] = prev; }
+    return out;
+  }
+  // ستوكاستك بطيء (kp, ks, dp) = (14,3,3)
+  function stoch(cs, kp = 14, ks = 3, dp = 3) {
+    const raw = new Array(cs.length).fill(NaN);
+    for (let i = kp - 1; i < cs.length; i++) {
+      let hh = -Infinity, ll = Infinity;
+      for (let j = i - kp + 1; j <= i; j++) { hh = Math.max(hh, cs[j].h); ll = Math.min(ll, cs[j].l); }
+      raw[i] = hh === ll ? 50 : ((cs[i].c - ll) / (hh - ll)) * 100;
+    }
+    const k = sma(raw, ks);
+    return { k, d: sma(k, dp) };
+  }
+  function macd(closes, f = 10, s = 26, g = 9) {
+    const ef = ema(closes, f), es = ema(closes, s);
+    const line = closes.map((_, i) => (isFinite(ef[i]) && isFinite(es[i]) ? ef[i] - es[i] : NaN));
+    const sig = emaSeries(line, g);
+    return { line, sig, hist: line.map((x, i) => x - sig[i]) };
+  }
+
+  /* ---------- الاستراتيجيات وطريقة دمج الشروط ---------- */
+  const CONDITION_LIST = [
+    { id: 'dna_stoch', label: '1) ستوكاستك (14,3,3) لمس تشبع البيع ≤ 20 خلال آخر 15 شمعة' },
+    { id: 'dna_rsi', label: '2) RSI(8) عبر 50 للأعلى وهو فوق متوسطه (14)' },
+    { id: 'dna_macd', label: '3) MACD (10,26,9) تقاطع صاعد قرب خط الصفر' },
+    { id: 'dna_room', label: '4) ستوكاستك لم يصل تشبع الشراء (< 80) ويصعد' },
+    { id: 'dna_candle', label: '5) شمعة الدخول صاعدة' },
+    { id: 'trend', label: 'اتجاه صاعد (فوق EMA200)' },
+    { id: 'sr', label: 'ارتداد من دعم أو اختراق مقاومة بحجم (الدعوم + الفوليوم بروفايل)' },
+    { id: 'flow', label: 'سيولة داخلة (درجة ≥ 40 وشراء Taker ≥ 50%)' },
+  ];
+  const DNA5 = ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'];
+  const PRESETS = {
+    sr: { name: 'الدعم والمقاومة + الفوليوم بروفايل (الأصلية)', req: null },
+    dna: { name: 'TraderDNA: ستوكاستك + RSI + MACD', req: DNA5 },
+    combo: { name: 'دمج: TraderDNA + اتجاه + سيولة', req: [...DNA5, 'trend', 'flow'] },
+    custom: { name: 'مخصص (اختر المؤشرات بنفسك)', req: [] },
+  };
+
   function analyze(cs, o = {}) {
     const n = cs.length;
     if (n < 80) return null;
@@ -365,38 +431,56 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     if (inflow.buyRatio < 0.47) warns.push('ضغط بيع من Taker');
 
     // الأهداف والوقف
-    let plan = null;
-    if (mode) {
-      const entry = price;
-      let stop = stopBase;
-      const risk = entry - stop;
-      if (risk > 0) {
-        const minDist = Math.max(0.6 * A, risk * 0.8);
-        const cand = resists.filter((l) => l.price >= entry + minDist);
-        const targets = [];
-        for (const l of cand) {
-          if (targets.length >= 3) break;
-          if (!targets.length || l.price - targets[targets.length - 1].price >= 0.5 * A)
-            targets.push({ price: l.price, kind: 'مقاومة' + (l.tag ? ' ' + l.tag : '') });
-        }
-        const mult = [1.5, 2.5, 4];
-        for (let k = targets.length; k < 3; k++) {
-          const p = Math.max(entry + risk * mult[k], (targets[k - 1] ? targets[k - 1].price + 0.5 * A : 0));
-          targets.push({ price: p, kind: `هدف ${mult[k]}R` });
-        }
-        targets.forEach((t) => {
-          t.rr = (t.price - entry) / risk;
-          t.prob = touchProb(entry, t.price, sigma, H);
-          t.pct = t.price / entry - 1;
-        });
-        plan = {
-          entry, stop, risk, riskPct: risk / entry, targets,
-          maxEntry: entry + Math.min(0.3 * A, 0.25 * risk), // أعلى سعر مقبول للدخول (لا تطارد)
-          stopProb: touchProb(entry, stop, sigma, H),
-          anchor: anchor.price,
-        };
+    const makePlan = (stop, anchorPrice) => {
+      const entry = price, risk = entry - stop;
+      if (!(risk > 0)) return null;
+      const minDist = Math.max(0.6 * A, risk * 0.8);
+      const cand = resists.filter((l) => l.price >= entry + minDist);
+      const targets = [];
+      for (const l of cand) {
+        if (targets.length >= 3) break;
+        if (!targets.length || l.price - targets[targets.length - 1].price >= 0.5 * A)
+          targets.push({ price: l.price, kind: 'مقاومة' + (l.tag ? ' ' + l.tag : '') });
       }
-    }
+      const mult = [1.5, 2.5, 4];
+      for (let k = targets.length; k < 3; k++) {
+        const p = Math.max(entry + risk * mult[k], (targets[k - 1] ? targets[k - 1].price + 0.5 * A : 0));
+        targets.push({ price: p, kind: `هدف ${mult[k]}R` });
+      }
+      targets.forEach((t) => {
+        t.rr = (t.price - entry) / risk;
+        t.prob = touchProb(entry, t.price, sigma, H);
+        t.pct = t.price / entry - 1;
+      });
+      return {
+        entry, stop, risk, riskPct: risk / entry, targets,
+        maxEntry: entry + Math.min(0.3 * A, 0.25 * risk), // أعلى سعر مقبول للدخول (لا تطارد)
+        stopProb: touchProb(entry, stop, sigma, H),
+        anchor: anchorPrice,
+      };
+    };
+    let plan = mode ? makePlan(stopBase, anchor.price) : null;
+
+    // مؤشرات TraderDNA
+    const st = stoch(cs, 14, 3, 3), r8 = rsi(closes, 8), r8ma = sma(r8, 14), mc = macd(closes, 10, 26, 9);
+    const i0 = n - 1, valAt = (b, j) => (typeof b === 'number' ? b : b[j]);
+    const crossUp = (a, b, look) => { for (let j = i0; j > i0 - look; j--) if (a[j - 1] <= valAt(b, j - 1) && a[j] > valAt(b, j)) return j; return -1; };
+    const crossDown = (a, b, look) => { for (let j = i0; j > i0 - look; j--) if (a[j - 1] >= valAt(b, j - 1) && a[j] < valAt(b, j)) return j; return -1; };
+    const kNow = st.k[i0], dNow = st.d[i0];
+    let wasOversold = false;
+    for (let j = i0; j > i0 - 15; j--) if (Math.min(st.k[j], st.d[j]) <= 20) { wasOversold = true; break; }
+    const rsiX = crossUp(r8, 50, 3), macdX = crossUp(mc.line, mc.sig, 3);
+    const okMap = {
+      dna_stoch: wasOversold,
+      dna_rsi: rsiX >= 0 && r8[i0] > r8ma[i0],
+      dna_macd: macdX >= 0 && mc.line[macdX] <= 0.2 * A,
+      dna_room: kNow < 80 && dNow < 80 && kNow > st.k[i0 - 1],
+      dna_candle: last.c > last.o,
+      trend: trendUp,
+      sr: !!mode,
+      flow: inflow.score >= 40 && inflow.buyRatio >= 0.5,
+    };
+    const conds = CONDITION_LIST.map((c) => ({ id: c.id, label: c.label, ok: !!okMap[c.id] }));
 
     let signal = 'WAIT';
     if (plan) {
@@ -432,10 +516,48 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
       }
     }
 
+    // اختيار الاستراتيجية / دمج المؤشرات (الأصلية تبقى كما هي)
+    const cfg = o.cfg || { preset: 'sr' };
+    if (cfg.preset && cfg.preset !== 'sr') {
+      const oldExit = signal === 'EXIT';
+      const req = cfg.preset === 'custom' ? (cfg.req || []) : PRESETS[cfg.preset].req;
+      const need = req.length ? Math.min(cfg.min > 0 ? cfg.min : req.length, req.length) : 0;
+      const okReq = conds.filter((c) => req.includes(c.id) && c.ok);
+      const missing = conds.filter((c) => req.includes(c.id) && !c.ok);
+      let p2 = plan;
+      if (!p2) { // خطة بدون دعم/اختراق: وقف تحت أدنى قاع في آخر 8 شموع (حد أقصى 3 ATR)
+        const lows = Math.min(...cs.slice(-8).map((c) => c.l));
+        const stop2 = Math.max(lows - 0.3 * A, price - 3 * A);
+        p2 = makePlan(stop2, lows);
+      }
+      reasons.length = 0; warns.length = 0;
+      okReq.forEach((c) => reasons.push('✓ ' + c.label));
+      let ready = req.length > 0 && okReq.length >= need && !!p2;
+      if (ready) {
+        const okRR = p2.targets[0].rr >= 1.0 && p2.targets[1].rr >= 1.8;
+        if (!okRR) { ready = false; warns.push('نسبة العائد/المخاطرة ضعيفة بسبب مقاومة قريبة'); }
+        if (p2.riskPct > 0.08) { ready = false; warns.push('الوقف بعيد (أكثر من 8%)'); }
+      }
+      if (okReq.length < need) missing.forEach((c) => warns.push('ينقص: ' + c.label));
+      if (!req.length) warns.push('اختر شرطاً واحداً على الأقل');
+      plan = p2;
+      score = req.length ? Math.round((100 * okReq.length) / req.length) : 0;
+      signal = ready ? 'BUY' : 'WAIT';
+      if (!ready && !trendUp && inflow.score < 40 && inflow.buyRatio < 0.5) signal = 'AVOID';
+      const dnaExit = crossDown(r8, 50, 2) >= 0 && crossDown(mc.line, mc.sig, 2) >= 0;
+      if (dnaExit) warns.push('RSI(8) نزل تحت 50 مع تقاطع MACD هابط');
+      if (oldExit || dnaExit) signal = 'EXIT';
+      watch = null;
+      if (signal === 'WAIT' && p2 && req.length && okReq.length >= Math.max(1, need - 2))
+        watch = { type: 'forming', level: p2.anchor, text: `تحقق ${okReq.length} من ${need} شرط — ينقص: ${missing.map((c) => c.label.replace(/^\d\) /, '')).join('، ') || 'تأكيد'}` };
+    }
+    const NS = Math.min(110, n), tail = (v) => v.slice(-NS);
+
     return {
       watch, price, atr: A, atrPct: A / price, rsi: rsiV, ema50: e50[n - 1], ema200: e200 ? e200[n - 1] : null,
       sigma, horizon: H, vp, levels, inflow, mode, score: Math.min(100, score), signal, plan, reasons, warns,
-      t: last.t,
+      conds, preset: cfg.preset || 'sr', t: last.t,
+      series: { k: tail(st.k), d: tail(st.d), r8: tail(r8), r8ma: tail(r8ma), macd: tail(mc.line), sig: tail(mc.sig) },
     };
   }
 
@@ -512,7 +634,7 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     const trades = [];
     let i = 210;
     while (i < cs.length - 2) {
-      const a = analyze(cs.slice(0, i + 1), { vpLen: 200 });
+      const a = analyze(cs.slice(0, i + 1), { vpLen: 200, cfg: o.cfg });
       if (a && a.signal === 'BUY' && a.plan) {
         const { entry, stop, risk } = a.plan;
         const tp = a.plan.targets[useTp].price;
@@ -536,7 +658,7 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     };
   }
 
-  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, validateInflow, summarizeExcess, managePosition, touchProb, normCdf, fmt, logReturnStd };
+  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, stoch, macd, sma, CONDITION_LIST, PRESETS, backtest, validateInflow, summarizeExcess, managePosition, touchProb, normCdf, fmt, logReturnStd };
 });
 
 </script>
@@ -557,6 +679,8 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
   };
 
   let valHtml = '';
+  let cfg = store.get('cfg', { preset: 'sr', req: ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'], min: 0 });
+  const activeReq = () => (cfg.preset === 'custom' ? cfg.req : (Analysis.PRESETS[cfg.preset].req || []));
   let rows = [], live = {}, tab = 'enter', sortKey = 'flow', sortDir = -1, detailSym = null;
   let ws1 = null, ws2 = null, timer = null, prevState = {}, firstScan = true, lastSig = '', batchOut = null, scanning = false;
   let positions = store.get('pos', []), history = store.get('hist', []);
@@ -612,7 +736,7 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
       await pool(pick, 6, async (t) => {
         try {
           const cs = await getKlines(t.symbol, tf, 300);
-          const a = Analysis.analyze(cs);
+          const a = Analysis.analyze(cs, { cfg });
           if (a) out.push({ symbol: t.symbol, price: +t.lastPrice, chg: +t.priceChangePercent, a, cs,
             flow: a.inflow.score, relVol: a.inflow.relVol, buy: a.inflow.buyRatio, signal: a.signal, score: a.score });
         } catch (e) { /* نتجاهل عملة فشل جلبها */ }
@@ -878,24 +1002,27 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     $('ov').innerHTML = `<div class="hd" style="justify-content:space-between"><div class="hd"><span class="nm">${name(sym)}/USDT</span>
       <span class="tag ${r.signal}">${LBL[r.signal]}</span><span class="up sm" id="lp">● ${fmt(r.price)}</span></div><button data-a="back">رجوع ✕</button></div>
       <canvas id="cv" style="margin-top:10px"></canvas>
+      <canvas id="cv2" style="height:300px;margin-top:6px"></canvas>
       ${p ? `<div class="lv"><div class="kv"><span>دخول (حتى)</span><b>${fmt(p.entry)} → ${fmt(p.maxEntry)}</b></div><div class="kv"><span>وقف</span><b class="dn">${fmt(p.stop)}</b></div>
         ${p.targets.map((t, i) => `<div class="kv"><span>هدف ${i + 1} · ${t.kind}</span><b class="up">${fmt(t.price)}</b><span>${t.rr.toFixed(1)}R · ${pct(t.prob, 0)}</span></div>`).join('')}</div>` : '<div class="mut">لا توجد خطة دخول حالياً.</div>'}
       <div class="lv"><div class="kv"><span>POC</span><b>${fmt(vp.poc)}</b></div><div class="kv"><span>VAH / VAL</span><b>${fmt(vp.vah)} / ${fmt(vp.val)}</b></div>
         <div class="kv"><span>RSI · ATR</span><b>${a.rsi.toFixed(0)} · ${pct(a.atrPct)}</b></div>
         <div class="kv"><span>صافي شراء Taker</span><b class="${a.inflow.netInflow >= 0 ? 'up' : 'dn'}">${a.inflow.netInflow >= 0 ? '+' : '-'}${money(a.inflow.netInflow)}</b></div></div>
+      <b>شروط الاستراتيجية (${Analysis.PRESETS[cfg.preset].name})</b>
+      ${a.conds.map((c) => `<div class="cond ${activeReq().includes(c.id) && cfg.preset !== 'sr' ? 'req' : 'mut'}"><i class="${c.ok ? 'up' : 'dn'}">${c.ok ? '✓' : '✗'}</i><span>${activeReq().includes(c.id) && cfg.preset !== 'sr' ? '<b>' + c.label + '</b>' : c.label}</span></div>`).join('')}
       <b>الأسباب</b><ul>${a.reasons.map((x) => `<li>${x}</li>`).join('') || '<li class="mut">—</li>'}</ul>
       ${a.warns.length ? `<b>تنبيهات</b><ul class="warn">${a.warns.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}
       <div class="act"><button data-a="bt1" data-s="${sym}">باك تست هذه العملة</button></div><div id="btres"></div>
       <div class="note">احتمال اللمس تقدير إحصائي (أفق ${a.horizon} شمعة) وليس وعداً. أداة تحليل وليست نصيحة مالية.</div>`;
     $('ov').classList.add('on');
-    drawChart($('cv'), r.cs, a, r.price);
+    drawChart($('cv'), r.cs, a, r.price); drawPanes($('cv2'), a);
   }
 
   async function runBacktest1(sym) {
     const el = $('btres'); el.innerHTML = '<div class="mut">جلب البيانات وتشغيل الباك تست...</div>';
     try {
       const cs = await getKlines(sym, $('tf').value, 1000);
-      const b = Analysis.backtest(cs, { tp: 2 });
+      const b = Analysis.backtest(cs, { tp: 2, cfg });
       el.innerHTML = `<div class="lv"><div class="kv"><span>الصفقات</span><b>${b.count}</b></div><div class="kv"><span>النجاح</span><b>${pct(b.winRate, 0)}</b></div>
         <div class="kv"><span>متوسط الصفقة</span><b class="${b.avgR >= 0 ? 'up' : 'dn'}">${b.avgR.toFixed(2)}R</b></div><div class="kv"><span>المجموع / أقصى تراجع</span><b>${b.totalR.toFixed(1)}R / ${b.maxDD.toFixed(1)}R</b></div></div>
         <div class="mut sm">${b.count < 20 ? 'عدد الصفقات قليل، النتيجة غير موثوقة. ' : ''}الأداء السابق لا يضمن المستقبل.</div>`;
@@ -910,7 +1037,7 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
       try {
         const cs = await getKlines(r.symbol, $('tf').value, 1000);
         await new Promise((res) => setTimeout(res, 0));
-        out.push({ r, b: Analysis.backtest(cs, { tp: 2 }) });
+        out.push({ r, b: Analysis.backtest(cs, { tp: 2, cfg }) });
       } catch (e) { /* تجاهل */ }
       setStatus(`باك تست شامل ${++done}/${list.length}...`);
     });
@@ -946,6 +1073,34 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
       <div class="tbl"><table><thead><tr><th>الدرجة</th>${H.map((h) => `<th>بعد ${h}</th>`).join('')}</tr></thead><tbody>${rowsB}</tbody></table></div>
       <div class="note">t أكبر من 2 تعني أن الفرق غالباً ليس صدفة. الأحداث تُحسب بفاصل أفق كامل بينها لتقليل التداخل، لكن العملات ترتبط ببعضها، فاعتبر t تقريبياً. أداء الماضي لا يضمن المستقبل.</div>`;
     setStatus('اكتمل اختبار السيولة.'); lastSig = ''; render();
+  }
+
+  // لوحات المؤشرات تحت الرسم: ستوكاستك / RSI(8) / MACD — بنفس محور الشموع
+  function drawPanes(cv, a) {
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext('2d'); g.scale(dpr, dpr);
+    const S = a.series, N = S.k.length, padR = 64, vpW = Math.min(110, W * 0.22), plotW = W - padR - vpW, ph = H / 3;
+    const xx = (i) => vpW + (i + 0.5) * (plotW / N);
+    g.font = '11px sans-serif';
+    const pane = (idx, title, lines, lo, hi, levels, bg) => {
+      const y0 = idx * ph + 14, y1 = (idx + 1) * ph - 4, y = (v) => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+      g.fillStyle = bg; g.fillRect(vpW, idx * ph + 1, plotW, ph - 2);
+      g.strokeStyle = 'rgba(132,142,156,.45)'; g.lineWidth = 1; g.setLineDash([3, 4]);
+      levels.forEach((l) => { g.beginPath(); g.moveTo(vpW, y(l)); g.lineTo(vpW + plotW, y(l)); g.stroke(); });
+      g.setLineDash([]);
+      lines.forEach(({ v, c }) => {
+        g.strokeStyle = c; g.lineWidth = 1.4; g.beginPath(); let on = false;
+        v.forEach((val, i) => { if (!isFinite(val)) return; if (on) g.lineTo(xx(i), y(val)); else { g.moveTo(xx(i), y(val)); on = true; } });
+        g.stroke();
+      });
+      g.fillStyle = '#848e9c'; g.textAlign = 'left'; g.fillText(title, vpW + 4, idx * ph + 12);
+      lines.forEach(({ v, c }, k) => { const val = v[v.length - 1]; if (isFinite(val)) { g.fillStyle = c; g.fillText(val.toFixed(Math.abs(val) < 1 ? 4 : 1), W - padR + 4, idx * ph + 14 + k * 13); } });
+    };
+    pane(0, 'Stoch (14,3,3)  تشبع 20/80', [{ v: S.k, c: '#4a90d9' }, { v: S.d, c: '#f0b90b' }], 0, 100, [20, 80], 'rgba(100,140,255,.07)');
+    pane(1, 'RSI (8)  خط 50', [{ v: S.r8, c: '#f6465d' }, { v: S.r8ma, c: '#848e9c' }], 0, 100, [50], 'rgba(80,160,255,.07)');
+    const m = [...S.macd, ...S.sig].filter(isFinite), mx = Math.max(1e-12, ...m.map(Math.abs));
+    pane(2, 'MACD (10,26,9)', [{ v: S.macd, c: '#f6465d' }, { v: S.sig, c: '#9b59ff' }], -mx, mx, [0], 'rgba(246,70,93,.06)');
   }
 
   function drawChart(cv, all, a, livePrice) {
@@ -1002,6 +1157,25 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     ws1.onclose = () => { ws1 = null; setTimeout(startLive, 3000); };
   }
 
+  /* ---------- الاستراتيجية ودمج المؤشرات ---------- */
+  function reanalyze() {
+    for (const r of rows) {
+      const a = Analysis.analyze(r.cs, { cfg });
+      if (a) Object.assign(r, { a, flow: a.inflow.score, relVol: a.inflow.relVol, buy: a.inflow.buyRatio, signal: a.signal, score: a.score });
+    }
+    firstScan = true; checkAlerts(); // نحدّث الحالة بصمت دون تنبيهات
+    batchOut = null; lastSig = ''; render();
+    if (detailSym) showDetail(detailSym);
+  }
+  function buildMix() {
+    const req = activeReq(), off = cfg.preset === 'sr';
+    $('preset').value = cfg.preset;
+    $('mixbox').innerHTML = (off ? '<div class="mut sm">الاستراتيجية الأصلية تقرر بمنطقها الخاص. اختر TraderDNA أو الدمج أو «مخصص» لتحديد الشروط.</div>' : '')
+      + Analysis.CONDITION_LIST.map((c) => `<label class="mixrow"><input type="checkbox" data-c="${c.id}" ${req.includes(c.id) ? 'checked' : ''} ${off ? 'disabled' : ''}>${c.label}</label>`).join('')
+      + `<label class="mixrow">الحد الأدنى للشروط المتحققة <input id="mixmin" type="number" min="0" max="8" value="${cfg.min || 0}" style="width:60px" ${off ? 'disabled' : ''}> <span class="mut sm">(0 = كل الشروط المحددة. مثلاً 3 من 5 يعطي إشارات أكثر وأقل دقة)</span></label>`;
+  }
+  function applyCfg() { store.set('cfg', cfg); buildMix(); reanalyze(); }
+
   /* ---------- أحداث ---------- */
   $('view').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-k]');
@@ -1024,14 +1198,21 @@ canvas{width:100%;height:380px;display:block;background:#0b0e11;border-radius:8p
     else if (el.dataset.a === 'bt1') runBacktest1(el.dataset.s);
   });
   $('tabs').onclick = (e) => { const b = e.target.closest('button[data-t]'); if (b) { tab = b.dataset.t; render(); } };
+  $('preset').onchange = (e) => { cfg = { preset: e.target.value, req: cfg.req && cfg.req.length ? cfg.req : ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'], min: 0 }; applyCfg(); };
+  $('mixbox').onchange = (e) => {
+    if (e.target.id === 'mixmin') { cfg.min = Math.max(0, +e.target.value || 0); applyCfg(); return; }
+    if (!e.target.dataset.c) return;
+    const req = [...document.querySelectorAll('#mixbox input[data-c]')].filter((x) => x.checked).map((x) => x.dataset.c);
+    cfg = { preset: 'custom', req, min: cfg.min || 0 }; applyCfg();
+  };
   $('scan').onclick = scan;
   $('tf').onchange = () => { valHtml = ''; rows = []; prevState = {}; firstScan = true; batchOut = null; lastSig = ''; render(); setStatus('تغيّر الإطار الزمني. اضغط «فحص السوق».'); };
   $('alerts').onchange = (e) => { if (e.target.checked && window.Notification && Notification.permission === 'default') Notification.requestPermission(); beep(); };
   $('auto').onchange = (e) => { clearInterval(timer); if (e.target.checked) timer = setInterval(scan, 5 * 60 * 1000); store.set('auto', e.target.checked); };
   ['capital', 'risk'].forEach((id) => { $(id).value = store.get(id, $(id).value); $(id).onchange = () => { store.set(id, $(id).value); lastSig = ''; render(); }; });
   $('auto').checked = store.get('auto', true); $('auto').onchange({ target: $('auto') });
-  window.addEventListener('resize', () => { const r = rows.find((x) => x.symbol === detailSym); if (r && $('cv')) drawChart($('cv'), r.cs, r.a, r.price); });
-  startLive(); render(); scan();
+  window.addEventListener('resize', () => { const r = rows.find((x) => x.symbol === detailSym); if (r && $('cv')) { drawChart($('cv'), r.cs, r.a, r.price); drawPanes($('cv2'), r.a); } });
+  buildMix(); startLive(); render(); scan();
 })();
 
 </script>

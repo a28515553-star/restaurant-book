@@ -202,6 +202,61 @@
   }
 
   /* ---------- التحليل والإشارة ---------- */
+  /* ---------- مؤشرات TraderDNA: ستوكاستك + RSI(8) + MACD ---------- */
+  function sma(v, p) {
+    const out = new Array(v.length).fill(NaN);
+    for (let i = p - 1; i < v.length; i++) {
+      let ok = true, t = 0;
+      for (let j = i - p + 1; j <= i; j++) { if (!isFinite(v[j])) { ok = false; break; } t += v[j]; }
+      if (ok) out[i] = t / p;
+    }
+    return out;
+  }
+  // EMA على سلسلة قد تبدأ بقيم NaN
+  function emaSeries(v, p) {
+    const out = new Array(v.length).fill(NaN), k = 2 / (p + 1);
+    let f = v.findIndex((x) => isFinite(x)); if (f < 0 || v.length - f < p) return out;
+    let prev = mean(v.slice(f, f + p)); out[f + p - 1] = prev;
+    for (let i = f + p; i < v.length; i++) { prev = v[i] * k + prev * (1 - k); out[i] = prev; }
+    return out;
+  }
+  // ستوكاستك بطيء (kp, ks, dp) = (14,3,3)
+  function stoch(cs, kp = 14, ks = 3, dp = 3) {
+    const raw = new Array(cs.length).fill(NaN);
+    for (let i = kp - 1; i < cs.length; i++) {
+      let hh = -Infinity, ll = Infinity;
+      for (let j = i - kp + 1; j <= i; j++) { hh = Math.max(hh, cs[j].h); ll = Math.min(ll, cs[j].l); }
+      raw[i] = hh === ll ? 50 : ((cs[i].c - ll) / (hh - ll)) * 100;
+    }
+    const k = sma(raw, ks);
+    return { k, d: sma(k, dp) };
+  }
+  function macd(closes, f = 10, s = 26, g = 9) {
+    const ef = ema(closes, f), es = ema(closes, s);
+    const line = closes.map((_, i) => (isFinite(ef[i]) && isFinite(es[i]) ? ef[i] - es[i] : NaN));
+    const sig = emaSeries(line, g);
+    return { line, sig, hist: line.map((x, i) => x - sig[i]) };
+  }
+
+  /* ---------- الاستراتيجيات وطريقة دمج الشروط ---------- */
+  const CONDITION_LIST = [
+    { id: 'dna_stoch', label: '1) ستوكاستك (14,3,3) لمس تشبع البيع ≤ 20 خلال آخر 15 شمعة' },
+    { id: 'dna_rsi', label: '2) RSI(8) عبر 50 للأعلى وهو فوق متوسطه (14)' },
+    { id: 'dna_macd', label: '3) MACD (10,26,9) تقاطع صاعد قرب خط الصفر' },
+    { id: 'dna_room', label: '4) ستوكاستك لم يصل تشبع الشراء (< 80) ويصعد' },
+    { id: 'dna_candle', label: '5) شمعة الدخول صاعدة' },
+    { id: 'trend', label: 'اتجاه صاعد (فوق EMA200)' },
+    { id: 'sr', label: 'ارتداد من دعم أو اختراق مقاومة بحجم (الدعوم + الفوليوم بروفايل)' },
+    { id: 'flow', label: 'سيولة داخلة (درجة ≥ 40 وشراء Taker ≥ 50%)' },
+  ];
+  const DNA5 = ['dna_stoch', 'dna_rsi', 'dna_macd', 'dna_room', 'dna_candle'];
+  const PRESETS = {
+    sr: { name: 'الدعم والمقاومة + الفوليوم بروفايل (الأصلية)', req: null },
+    dna: { name: 'TraderDNA: ستوكاستك + RSI + MACD', req: DNA5 },
+    combo: { name: 'دمج: TraderDNA + اتجاه + سيولة', req: [...DNA5, 'trend', 'flow'] },
+    custom: { name: 'مخصص (اختر المؤشرات بنفسك)', req: [] },
+  };
+
   function analyze(cs, o = {}) {
     const n = cs.length;
     if (n < 80) return null;
@@ -263,38 +318,56 @@
     if (inflow.buyRatio < 0.47) warns.push('ضغط بيع من Taker');
 
     // الأهداف والوقف
-    let plan = null;
-    if (mode) {
-      const entry = price;
-      let stop = stopBase;
-      const risk = entry - stop;
-      if (risk > 0) {
-        const minDist = Math.max(0.6 * A, risk * 0.8);
-        const cand = resists.filter((l) => l.price >= entry + minDist);
-        const targets = [];
-        for (const l of cand) {
-          if (targets.length >= 3) break;
-          if (!targets.length || l.price - targets[targets.length - 1].price >= 0.5 * A)
-            targets.push({ price: l.price, kind: 'مقاومة' + (l.tag ? ' ' + l.tag : '') });
-        }
-        const mult = [1.5, 2.5, 4];
-        for (let k = targets.length; k < 3; k++) {
-          const p = Math.max(entry + risk * mult[k], (targets[k - 1] ? targets[k - 1].price + 0.5 * A : 0));
-          targets.push({ price: p, kind: `هدف ${mult[k]}R` });
-        }
-        targets.forEach((t) => {
-          t.rr = (t.price - entry) / risk;
-          t.prob = touchProb(entry, t.price, sigma, H);
-          t.pct = t.price / entry - 1;
-        });
-        plan = {
-          entry, stop, risk, riskPct: risk / entry, targets,
-          maxEntry: entry + Math.min(0.3 * A, 0.25 * risk), // أعلى سعر مقبول للدخول (لا تطارد)
-          stopProb: touchProb(entry, stop, sigma, H),
-          anchor: anchor.price,
-        };
+    const makePlan = (stop, anchorPrice) => {
+      const entry = price, risk = entry - stop;
+      if (!(risk > 0)) return null;
+      const minDist = Math.max(0.6 * A, risk * 0.8);
+      const cand = resists.filter((l) => l.price >= entry + minDist);
+      const targets = [];
+      for (const l of cand) {
+        if (targets.length >= 3) break;
+        if (!targets.length || l.price - targets[targets.length - 1].price >= 0.5 * A)
+          targets.push({ price: l.price, kind: 'مقاومة' + (l.tag ? ' ' + l.tag : '') });
       }
-    }
+      const mult = [1.5, 2.5, 4];
+      for (let k = targets.length; k < 3; k++) {
+        const p = Math.max(entry + risk * mult[k], (targets[k - 1] ? targets[k - 1].price + 0.5 * A : 0));
+        targets.push({ price: p, kind: `هدف ${mult[k]}R` });
+      }
+      targets.forEach((t) => {
+        t.rr = (t.price - entry) / risk;
+        t.prob = touchProb(entry, t.price, sigma, H);
+        t.pct = t.price / entry - 1;
+      });
+      return {
+        entry, stop, risk, riskPct: risk / entry, targets,
+        maxEntry: entry + Math.min(0.3 * A, 0.25 * risk), // أعلى سعر مقبول للدخول (لا تطارد)
+        stopProb: touchProb(entry, stop, sigma, H),
+        anchor: anchorPrice,
+      };
+    };
+    let plan = mode ? makePlan(stopBase, anchor.price) : null;
+
+    // مؤشرات TraderDNA
+    const st = stoch(cs, 14, 3, 3), r8 = rsi(closes, 8), r8ma = sma(r8, 14), mc = macd(closes, 10, 26, 9);
+    const i0 = n - 1, valAt = (b, j) => (typeof b === 'number' ? b : b[j]);
+    const crossUp = (a, b, look) => { for (let j = i0; j > i0 - look; j--) if (a[j - 1] <= valAt(b, j - 1) && a[j] > valAt(b, j)) return j; return -1; };
+    const crossDown = (a, b, look) => { for (let j = i0; j > i0 - look; j--) if (a[j - 1] >= valAt(b, j - 1) && a[j] < valAt(b, j)) return j; return -1; };
+    const kNow = st.k[i0], dNow = st.d[i0];
+    let wasOversold = false;
+    for (let j = i0; j > i0 - 15; j--) if (Math.min(st.k[j], st.d[j]) <= 20) { wasOversold = true; break; }
+    const rsiX = crossUp(r8, 50, 3), macdX = crossUp(mc.line, mc.sig, 3);
+    const okMap = {
+      dna_stoch: wasOversold,
+      dna_rsi: rsiX >= 0 && r8[i0] > r8ma[i0],
+      dna_macd: macdX >= 0 && mc.line[macdX] <= 0.2 * A,
+      dna_room: kNow < 80 && dNow < 80 && kNow > st.k[i0 - 1],
+      dna_candle: last.c > last.o,
+      trend: trendUp,
+      sr: !!mode,
+      flow: inflow.score >= 40 && inflow.buyRatio >= 0.5,
+    };
+    const conds = CONDITION_LIST.map((c) => ({ id: c.id, label: c.label, ok: !!okMap[c.id] }));
 
     let signal = 'WAIT';
     if (plan) {
@@ -330,10 +403,48 @@
       }
     }
 
+    // اختيار الاستراتيجية / دمج المؤشرات (الأصلية تبقى كما هي)
+    const cfg = o.cfg || { preset: 'sr' };
+    if (cfg.preset && cfg.preset !== 'sr') {
+      const oldExit = signal === 'EXIT';
+      const req = cfg.preset === 'custom' ? (cfg.req || []) : PRESETS[cfg.preset].req;
+      const need = req.length ? Math.min(cfg.min > 0 ? cfg.min : req.length, req.length) : 0;
+      const okReq = conds.filter((c) => req.includes(c.id) && c.ok);
+      const missing = conds.filter((c) => req.includes(c.id) && !c.ok);
+      let p2 = plan;
+      if (!p2) { // خطة بدون دعم/اختراق: وقف تحت أدنى قاع في آخر 8 شموع (حد أقصى 3 ATR)
+        const lows = Math.min(...cs.slice(-8).map((c) => c.l));
+        const stop2 = Math.max(lows - 0.3 * A, price - 3 * A);
+        p2 = makePlan(stop2, lows);
+      }
+      reasons.length = 0; warns.length = 0;
+      okReq.forEach((c) => reasons.push('✓ ' + c.label));
+      let ready = req.length > 0 && okReq.length >= need && !!p2;
+      if (ready) {
+        const okRR = p2.targets[0].rr >= 1.0 && p2.targets[1].rr >= 1.8;
+        if (!okRR) { ready = false; warns.push('نسبة العائد/المخاطرة ضعيفة بسبب مقاومة قريبة'); }
+        if (p2.riskPct > 0.08) { ready = false; warns.push('الوقف بعيد (أكثر من 8%)'); }
+      }
+      if (okReq.length < need) missing.forEach((c) => warns.push('ينقص: ' + c.label));
+      if (!req.length) warns.push('اختر شرطاً واحداً على الأقل');
+      plan = p2;
+      score = req.length ? Math.round((100 * okReq.length) / req.length) : 0;
+      signal = ready ? 'BUY' : 'WAIT';
+      if (!ready && !trendUp && inflow.score < 40 && inflow.buyRatio < 0.5) signal = 'AVOID';
+      const dnaExit = crossDown(r8, 50, 2) >= 0 && crossDown(mc.line, mc.sig, 2) >= 0;
+      if (dnaExit) warns.push('RSI(8) نزل تحت 50 مع تقاطع MACD هابط');
+      if (oldExit || dnaExit) signal = 'EXIT';
+      watch = null;
+      if (signal === 'WAIT' && p2 && req.length && okReq.length >= Math.max(1, need - 2))
+        watch = { type: 'forming', level: p2.anchor, text: `تحقق ${okReq.length} من ${need} شرط — ينقص: ${missing.map((c) => c.label.replace(/^\d\) /, '')).join('، ') || 'تأكيد'}` };
+    }
+    const NS = Math.min(110, n), tail = (v) => v.slice(-NS);
+
     return {
       watch, price, atr: A, atrPct: A / price, rsi: rsiV, ema50: e50[n - 1], ema200: e200 ? e200[n - 1] : null,
       sigma, horizon: H, vp, levels, inflow, mode, score: Math.min(100, score), signal, plan, reasons, warns,
-      t: last.t,
+      conds, preset: cfg.preset || 'sr', t: last.t,
+      series: { k: tail(st.k), d: tail(st.d), r8: tail(r8), r8ma: tail(r8ma), macd: tail(mc.line), sig: tail(mc.sig) },
     };
   }
 
@@ -410,7 +521,7 @@
     const trades = [];
     let i = 210;
     while (i < cs.length - 2) {
-      const a = analyze(cs.slice(0, i + 1), { vpLen: 200 });
+      const a = analyze(cs.slice(0, i + 1), { vpLen: 200, cfg: o.cfg });
       if (a && a.signal === 'BUY' && a.plan) {
         const { entry, stop, risk } = a.plan;
         const tp = a.plan.targets[useTp].price;
@@ -434,5 +545,5 @@
     };
   }
 
-  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, validateInflow, summarizeExcess, managePosition, touchProb, normCdf, fmt, logReturnStd };
+  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, stoch, macd, sma, CONDITION_LIST, PRESETS, backtest, validateInflow, summarizeExcess, managePosition, touchProb, normCdf, fmt, logReturnStd };
 });
