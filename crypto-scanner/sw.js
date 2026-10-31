@@ -1,5 +1,5 @@
 // Service worker: يخزّن ملفات التطبيق فقط ليفتح بسرعة وبدون إنترنت؛ طلبات بينانس تمر دائماً للشبكة.
-const CACHE = 'scanner-v1';
+const CACHE = 'scanner-v2';
 const FILES = ['./', 'index.html', 'app.js', 'analysis.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

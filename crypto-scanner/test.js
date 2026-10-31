@@ -62,4 +62,17 @@ console.log('باك تست:', bt.count, 'صفقة، نسبة نجاح', (bt.winR
 const early = bt.trades.filter((t) => t.i + t.bars < 690).map((t) => t.i + ':' + t.R.toFixed(6));
 const early2 = bt2.trades.filter((t) => t.i + t.bars < 690).map((t) => t.i + ':' + t.R.toFixed(6));
 assert.deepStrictEqual(early, early2, 'الباك تست يجب ألا يتأثر بالمستقبل');
+// 6) إدارة الصفقة
+const pos = { entry: 100, stop0: 95, stop: 95, targets: [105, 110, 120], hits: 0 };
+let m = A.managePosition(pos, 101, false); assert.strictEqual(m.action, 'HOLD');
+m = A.managePosition(pos, 94, false); assert.strictEqual(m.action, 'EXIT');
+m = A.managePosition(pos, 106, false); assert.strictEqual(m.action, 'SELL_PART'); assert.strictEqual(m.stop, 100); assert.strictEqual(m.hits, 1);
+Object.assign(pos, { hits: m.hits, stop: m.stop });
+m = A.managePosition(pos, 99, false); assert.strictEqual(m.action, 'EXIT', 'الوقف المتحرك على الدخول');
+m = A.managePosition(pos, 111, false); assert.strictEqual(m.hits, 2); assert.strictEqual(m.stop, 105);
+Object.assign(pos, { hits: 2, stop: 105 });
+m = A.managePosition(pos, 121, false); assert.strictEqual(m.action, 'EXIT'); assert.strictEqual(m.hits, 3);
+assert(Math.abs(A.managePosition({ entry: 100, stop0: 95, stop: 95, targets: [105, 110, 120], hits: 0 }, 110, false).R - 2) < 1e-9, 'R=2');
+m = A.managePosition({ entry: 100, stop0: 95, stop: 95, targets: [105, 110, 120], hits: 0 }, 102, true); assert.strictEqual(m.action, 'EXIT');
+for (let i = 250; i < 1000; i += 5) { const r = A.analyze(cs.slice(0, i)); if (r.plan) assert(r.plan.maxEntry > r.plan.entry && r.plan.maxEntry < r.plan.targets[0].price); }
 console.log('كل الاختبارات نجحت ✔');

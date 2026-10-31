@@ -289,6 +289,7 @@
         });
         plan = {
           entry, stop, risk, riskPct: risk / entry, targets,
+          maxEntry: entry + Math.min(0.3 * A, 0.25 * risk), // أعلى سعر مقبول للدخول (لا تطارد)
           stopProb: touchProb(entry, stop, sigma, H),
           anchor: anchor.price,
         };
@@ -312,11 +313,54 @@
       warns.push(broke ? `كسر دعم ${fmt(broke.price)} بإغلاق وضغط بيع` : 'كسر EMA50 مع انقلاب السيولة للبيع');
     }
 
+    // ما الذي أنتظره؟ (للعملات التي لم تصل لإشارة شراء بعد)
+    let watch = null;
+    if (signal === 'WAIT') {
+      if (plan) {
+        const miss = [];
+        if (score < 60) miss.push('النقاط أقل من 60');
+        if (!(plan.targets[0].rr >= 1.0 && plan.targets[1].rr >= 1.8)) miss.push('مقاومة قريبة تضعف العائد');
+        if (!trendUp) miss.push('الاتجاه هابط');
+        if (plan.riskPct > 0.08) miss.push('الوقف بعيد');
+        watch = { type: 'forming', level: anchor.price, text: 'الإعداد موجود لكن ينقصه: ' + (miss.join('، ') || 'تأكيد إضافي') };
+      } else if (trendUp) {
+        const S2 = supports[0], R2 = resists[0];
+        if (S2 && price - S2.price <= 2.5 * A) watch = { type: 'support', level: S2.price, text: `قريب من دعم ${fmt(S2.price)} — ادخل فقط إذا ارتد وأغلقت شمعة صاعدة بحجم` };
+        else if (R2 && R2.strength >= 2 && R2.price - price <= 1.0 * A && inflow.score >= 40) watch = { type: 'breakout', level: R2.price, text: `ينتظر إغلاق شمعة فوق ${fmt(R2.price)} بحجم 1.5x أو أكثر` };
+      }
+    }
+
     return {
-      price, atr: A, atrPct: A / price, rsi: rsiV, ema50: e50[n - 1], ema200: e200 ? e200[n - 1] : null,
+      watch, price, atr: A, atrPct: A / price, rsi: rsiV, ema50: e50[n - 1], ema200: e200 ? e200[n - 1] : null,
       sigma, horizon: H, vp, levels, inflow, mode, score: Math.min(100, score), signal, plan, reasons, warns,
       t: last.t,
     };
+  }
+
+  /* ---------- إدارة الصفقة المفتوحة ----------
+     pos: { entry, stop0, stop, targets:[t1,t2,t3], hits }  — تُرجع الإجراء المطلوب الآن وتحدّث الوقف المتحرك:
+     هدف1 → بيع 50% ووقف على الدخول؛ هدف2 → بيع 30% ووقف على هدف1؛ هدف3 → بيع الباقي. */
+  function managePosition(pos, price, exitSignal) {
+    let hits = pos.hits || 0, stop = pos.stop, newly = [];
+    while (hits < 3 && price >= pos.targets[hits]) { hits++; newly.push(hits); }
+    if (hits >= 2) stop = Math.max(stop, pos.targets[0]);
+    else if (hits >= 1) stop = Math.max(stop, pos.entry);
+    let action, text;
+    if (price <= stop) {
+      action = 'EXIT';
+      text = hits ? 'اخرج من الباقي الآن: ضرب الوقف المتحرك وربحك محمي' : 'اخرج الآن: ضُرب وقف الخسارة';
+    } else if (hits >= 3) {
+      action = 'EXIT'; text = 'تحقق الهدف 3: بع كل الباقي';
+    } else if (newly.length) {
+      const k = newly[newly.length - 1];
+      action = 'SELL_PART';
+      text = k === 1 ? 'تحقق الهدف 1: بع 50% من الكمية وانقل الوقف إلى سعر الدخول'
+        : 'تحقق الهدف 2: بع 30% من الكمية وانقل الوقف إلى الهدف 1';
+    } else if (exitSignal) {
+      action = 'EXIT'; text = 'إشارة خروج: انكسر الدعم أو انقلبت السيولة، اخرج الآن';
+    } else { action = 'HOLD'; text = 'احتفظ بالصفقة، لا إجراء مطلوب'; }
+    const R = (price - pos.entry) / (pos.entry - pos.stop0);
+    return { action, text, stop, hits, newly, R };
   }
 
   function fmt(p) {
@@ -359,5 +403,5 @@
     };
   }
 
-  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, touchProb, normCdf, fmt, logReturnStd };
+  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, managePosition, touchProb, normCdf, fmt, logReturnStd };
 });
