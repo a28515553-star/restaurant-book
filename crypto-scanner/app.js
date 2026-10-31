@@ -5,7 +5,8 @@
   const STABLE = new Set(['USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'BUSD', 'USDE', 'EUR', 'EURI', 'AEUR', 'GBP', 'TRY', 'BRL', 'USD1', 'XUSD', 'PAXG']);
   const $ = (id) => document.getElementById(id);
   const fmt = Analysis.fmt;
-  let rows = [], sortKey = 'flow', sortDir = -1, selected = null, timer = null;
+  const LBL = { BUY: 'شراء', WAIT: 'انتظار', AVOID: 'تجنب', EXIT: 'خروج' };
+  let rows = [], prevState = {}, firstScan = true, ws1 = null, ws2 = null, sortKey = 'flow', sortDir = -1, selected = null, timer = null;
 
   async function api(path) {
     let err;
@@ -56,6 +57,8 @@
         if (done % 10 === 0) render();
       });
       render();
+      checkAlerts();
+      startLive(tf);
       setStatus(`تم تحليل ${rows.length} عملة — ${new Date().toLocaleTimeString('ar')} — الشموع المغلقة فقط.`);
       if (selected) { const r = rows.find((x) => x.symbol === selected); if (r) showDetail(r); }
     } catch (e) {
@@ -67,7 +70,7 @@
   const pct = (x, d = 2) => (x * 100).toFixed(d) + '%';
 
   function render() {
-    const order = { BUY: 3, WAIT: 2, AVOID: 1 };
+    const order = { BUY: 4, WAIT: 3, AVOID: 2, EXIT: 1 };
     const sorted = [...rows].sort((x, y) => {
       const a = sortKey === 'signal' ? order[x.signal] : x[sortKey], b = sortKey === 'signal' ? order[y.signal] : y[sortKey];
       return (a > b ? 1 : a < b ? -1 : 0) * sortDir;
@@ -80,7 +83,7 @@
         <td class="${r.chg >= 0 ? 'up' : 'dn'}">${r.chg.toFixed(2)}%</td>
         <td><span class="bar" style="width:${r.flow * 0.5}px"></span> ${r.flow} <span class="mut">${r.a.inflow.label}</span></td>
         <td>${r.relVol.toFixed(1)}x</td><td class="${r.buy >= 0.5 ? 'up' : 'dn'}">${(r.buy * 100).toFixed(0)}%</td>
-        <td><span class="tag ${r.signal}">${{ BUY: 'شراء', WAIT: 'انتظار', AVOID: 'تجنب' }[r.signal]}</span></td><td>${r.score}</td>`;
+        <td><span class="tag ${r.signal}">${LBL[r.signal]}</span></td><td>${r.score}</td>`;
       tr.onclick = () => { selected = r.symbol; render(); showDetail(r); };
       tb.appendChild(tr);
     }
@@ -99,7 +102,7 @@
     }
     $('detail').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <h2 style="margin:0">${r.symbol} <span class="tag ${a.signal}">${{ BUY: 'شراء', WAIT: 'انتظار', AVOID: 'تجنب' }[a.signal]}</span> <span class="mut">${a.score}/100</span></h2>
+        <h2 style="margin:0">${r.symbol} <span class="live" id="lp"></span> <span class="tag ${a.signal}">${LBL[a.signal]}</span> <span class="mut">${a.score}/100</span></h2>
         <button id="bt">باك تست على آخر 1000 شمعة</button></div>
       <canvas id="cv"></canvas>
       ${planHtml}
@@ -115,6 +118,8 @@
       <div class="note">احتمال اللمس = تقدير إحصائي (سير عشوائي بتذبذب آخر 100 شمعة، أفق ${a.horizon} شمعة) وليس وعداً.
       الأهداف مبنية على مقاومات وفوليوم بروفايل فعلية، وعند غيابها تُستكمل بمضاعفات المخاطرة (R). هذا أداة تحليل وليس نصيحة مالية؛ لا توجد استراتيجية تضمن الربح.</div>`;
     drawChart($('cv'), r.cs, a);
+    updateLive(r);
+    startKline(r);
     $('bt').onclick = () => runBacktest(r);
   }
 
@@ -188,8 +193,116 @@
     g.fillText('POC', 2, y(vp.poc) - 3);
   }
 
+
+  /* ---------- التنبيهات ---------- */
+  function beep() {
+    try {
+      const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+      o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.value = 0.08;
+      o.start(); o.stop(c.currentTime + 0.25);
+    } catch (e) { /* بعض المتصفحات تمنع الصوت قبل أي نقر */ }
+  }
+  function notify(title, body) {
+    const t = document.createElement('div'); t.className = 'toast'; t.innerHTML = `<b>${title}</b><br>${body}`;
+    $('toasts').appendChild(t); setTimeout(() => t.remove(), 12000);
+    if (!$('alerts').checked) return;
+    beep();
+    try { if (window.Notification && Notification.permission === 'granted') new Notification(title, { body }); } catch (e) { /* ignore */ }
+  }
+  function checkAlerts() {
+    for (const r of rows) {
+      const prev = prevState[r.symbol] || {}, strong = r.a.inflow.label === 'دخول سيولة قوي';
+      const name = r.symbol.replace('USDT', '');
+      if (!firstScan) {
+        if (r.signal === 'BUY' && prev.signal !== 'BUY') notify(`إشارة شراء ${name}`, `دخول ${fmt(r.a.plan.entry)} · وقف ${fmt(r.a.plan.stop)} · هدف1 ${fmt(r.a.plan.targets[0].price)}`);
+        else if (r.signal === 'EXIT' && prev.signal === 'BUY') notify(`خروج ${name}`, 'انكسر الدعم أو انقلبت السيولة بعد إشارة شراء');
+        if (strong && !prev.strong) notify(`دخول سيولة قوي ${name}`, `حجم ${r.relVol.toFixed(1)}x · شراء Taker ${(r.buy * 100).toFixed(0)}%`);
+      }
+      prevState[r.symbol] = { signal: r.signal, strong };
+    }
+    firstScan = false;
+  }
+
+  /* ---------- بيانات مباشرة (WebSocket) ---------- */
+  function startLive(tf) {
+    if (ws1) return;
+    const open = () => {
+      ws1 = new WebSocket('wss://stream.binance.com:9443/stream?streams=!miniTicker@arr');
+      let last = 0;
+      ws1.onmessage = (e) => {
+        const arr = JSON.parse(e.data).data, now = Date.now(); if (!Array.isArray(arr)) return;
+        const m = new Map(arr.map((x) => [x.s, x]));
+        for (const r of rows) { const x = m.get(r.symbol); if (x) { r.price = +x.c; r.chg = (+x.c / +x.o - 1) * 100; } }
+        if (now - last > 1500) { last = now; render(); const r = rows.find((x) => x.symbol === selected); if (r) updateLive(r); }
+      };
+      ws1.onclose = () => { ws1 = null; setTimeout(() => rows.length && startLive(tf), 3000); };
+    };
+    open();
+  }
+  function updateLive(r) {
+    const el = $('lp'); if (!el) return;
+    const p = r.a.plan; let txt = '● ' + fmt(r.price);
+    if (p) {
+      if (r.price <= p.stop) txt += ' — ضُرب الوقف';
+      else { const hit = p.targets.filter((t) => r.price >= t.price).length; txt += hit ? ` — تحقق هدف ${hit}` : ` — ${((r.price / p.entry - 1) * 100).toFixed(2)}% عن الدخول`; }
+    }
+    el.textContent = txt;
+  }
+  // شمعة جديدة مغلقة للعملة المختارة → إعادة التحليل فوراً
+  function startKline(r) {
+    if (ws2) { ws2.onclose = null; ws2.close(); }
+    const tf = $('tf').value;
+    ws2 = new WebSocket(`wss://stream.binance.com:9443/ws/${r.symbol.toLowerCase()}@kline_${tf}`);
+    ws2.onmessage = (e) => {
+      const k = JSON.parse(e.data).k; if (!k || !k.x) return;
+      const c = Analysis.parseKlines([[k.t, k.o, k.h, k.l, k.c, k.v, k.T, k.q, k.n, k.V, k.Q, 0]])[0];
+      if (r.cs[r.cs.length - 1].t === c.t) return;
+      r.cs.push(c); if (r.cs.length > 400) r.cs.shift();
+      const a = Analysis.analyze(r.cs); if (!a) return;
+      Object.assign(r, { a, flow: a.inflow.score, relVol: a.inflow.relVol, buy: a.inflow.buyRatio, signal: a.signal, score: a.score });
+      checkAlerts(); render(); if (selected === r.symbol) showDetail(r);
+    };
+    ws2.onclose = () => { if (selected === r.symbol) setTimeout(() => selected === r.symbol && startKline(r), 3000); };
+  }
+
+  /* ---------- باك تست شامل ---------- */
+  async function batchBacktest() {
+    if (!rows.length) { setStatus('افحص السوق أولاً.'); return; }
+    const btn = $('batch'); btn.disabled = true;
+    const box = $('batchres'); box.style.display = 'block';
+    const list = [...rows].sort((a, b) => b.flow - a.flow), out = [];
+    let done = 0;
+    await pool(list, 4, async (r) => {
+      try {
+        const cs = await getKlines(r.symbol, $('tf').value, 1000);
+        await new Promise((res) => setTimeout(res, 0));
+        const b = Analysis.backtest(cs, { tp: 2 });
+        out.push({ r, b });
+      } catch (e) { /* تجاهل */ }
+      setStatus(`باك تست شامل ${++done}/${list.length}...`);
+    });
+    const ok = out.filter((x) => x.b.count >= 10).sort((x, y) => y.b.avgR - x.b.avgR);
+    const few = out.filter((x) => x.b.count < 10);
+    const row = ({ r, b }) => `<tr class="row" data-s="${r.symbol}"><td><b>${r.symbol.replace('USDT', '')}</b></td><td>${b.count}</td>
+      <td>${pct(b.winRate, 0)}</td><td class="${b.avgR >= 0 ? 'up' : 'dn'}">${b.avgR.toFixed(2)}R</td><td>${b.totalR.toFixed(1)}R</td>
+      <td>${b.maxDD.toFixed(1)}R</td><td><span class="tag ${r.signal}">${LBL[r.signal]}</span></td></tr>`;
+    box.innerHTML = `<b>ترتيب العملات بالباك تست (${$('tf').value} · آخر 1000 شمعة · عمولة 0.1%)</b>
+      <div class="mut">الترتيب بمتوسط R لكل صفقة. يُعتمد فقط ما فيه 10 صفقات أو أكثر. تحسين الإعدادات على نفس البيانات قد يعطي نتائج مضللة — الأداء السابق لا يضمن المستقبل.</div>
+      <div class="tbl"><table><thead><tr><th>العملة</th><th>الصفقات</th><th>النجاح</th><th>متوسط R</th><th>المجموع</th><th>أقصى تراجع</th><th>الآن</th></tr></thead>
+      <tbody>${ok.map(row).join('') || '<tr><td colspan="7" class="mut">لا توجد عملة بصفقات كافية.</td></tr>'}</tbody></table></div>
+      ${few.length ? `<div class="mut">صفقات قليلة (غير موثوقة): ${few.map((x) => x.r.symbol.replace('USDT', '') + ' (' + x.b.count + ')').join('، ')}</div>` : ''}`;
+    box.querySelectorAll('tr.row').forEach((tr) => tr.onclick = () => {
+      const r = rows.find((x) => x.symbol === tr.dataset.s); if (r) { selected = r.symbol; render(); showDetail(r); window.scrollTo(0, 0); }
+    });
+    setStatus(`اكتمل الباك تست الشامل لـ ${out.length} عملة.`);
+    btn.disabled = false;
+  }
+
   /* ---------- أحداث ---------- */
   $('scan').onclick = scan;
+  $('batch').onclick = batchBacktest;
+  $('alerts').onchange = (e) => { if (e.target.checked && window.Notification && Notification.permission === 'default') Notification.requestPermission(); beep(); };
+  $('tf').onchange = () => { rows = []; prevState = {}; firstScan = true; selected = null; render(); setStatus('تغيّر الإطار الزمني — اضغط «فحص السوق».'); };
   $('tbl').tHead.onclick = (e) => {
     const k = e.target.dataset && e.target.dataset.k; if (!k) return;
     sortDir = k === sortKey ? -sortDir : -1; sortKey = k; render();

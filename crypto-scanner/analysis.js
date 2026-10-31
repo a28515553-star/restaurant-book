@@ -237,6 +237,8 @@
         mode = 'bounce'; anchor = S; stopBase = Math.min(S.price, ...cs.slice(-3).map((c) => c.l)) - 0.5 * A;
         score += 20; reasons.push(`ارتداد من دعم ${fmt(S.price)}${S.tag ? ' (' + S.tag + ')' : ''} — قوة ${S.strength.toFixed(1)}`);
         if (bullish) { score += 10; reasons.push('شمعة تأكيد صاعدة'); }
+        if (inflow.relVol >= 1.2 && inflow.buyRatio >= 0.52) { score += 8; reasons.push(`تأكيد بالحجم (${inflow.relVol.toFixed(1)}x وشراء ${(inflow.buyRatio * 100).toFixed(0)}%)`); }
+        else warns.push('الارتداد بدون تأكيد حجم كافٍ');
         const body = Math.abs(last.c - last.o), lw = Math.min(last.o, last.c) - last.l;
         if (lw > body && lw > 0.3 * A) { score += 5; reasons.push('ذيل سفلي طويل (رفض للسعر الأدنى)'); }
       }
@@ -301,6 +303,14 @@
       if (plan.riskPct > 0.08) warns.push('الوقف بعيد (أكثر من 8%)');
     }
     if (!trendUp && inflow.score < 40 && inflow.buyRatio < 0.5) signal = 'AVOID';
+
+    // خروج: إغلاق تحت دعم قوي كُسر للتو بحجم وضغط بيع، أو تحت EMA50 مع انقلاب السيولة
+    const broke = levels.find((l) => l.strength >= 3 && closes[n - 2] >= l.price && closes[n - 1] < l.price - 0.3 * A);
+    const lostEma = closes[n - 2] >= e50[n - 2] && price < e50[n - 1] - 0.3 * A;
+    if ((broke && inflow.buyRatio < 0.5 && inflow.relVol >= 1.2) || (lostEma && inflow.buyRatio < 0.48 && inflow.cvdUp === false)) {
+      signal = 'EXIT';
+      warns.push(broke ? `كسر دعم ${fmt(broke.price)} بإغلاق وضغط بيع` : 'كسر EMA50 مع انقلاب السيولة للبيع');
+    }
 
     return {
       price, atr: A, atrPct: A / price, rsi: rsiV, ema50: e50[n - 1], ema200: e200 ? e200[n - 1] : null,
