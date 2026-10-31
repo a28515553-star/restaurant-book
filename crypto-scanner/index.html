@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ماسح بينانس</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b0e11">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ماسح بينانس">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root{--bg:#0b0e11;--panel:#161a1e;--line:#2b3139;--tx:#eaecef;--mut:#848e9c;--up:#0ecb81;--dn:#f6465d;--acc:#f0b90b}
 *{box-sizing:border-box}
@@ -65,5 +73,6 @@ ul{margin:6px 0;padding-inline-start:20px}li{margin:2px 0}
 <div id="toasts"></div>
 <script src="analysis.js"></script>
 <script src="app.js"></script>
+<script>if("serviceWorker"in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(function(){});</script>
 </body>
 </html>
