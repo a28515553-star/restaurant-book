@@ -363,6 +363,37 @@
     return { action, text, stop, hits, newly, R };
   }
 
+  /* ---------- اختبار دقة مؤشر دخول السيولة ----------
+     لكل شمعة: نحسب حكم السيولة بالبيانات المتاحة وقتها فقط (بدون نظر للمستقبل)، ثم نقيس العائد بعد h شمعة،
+     ونطرح منه متوسط عائد نفس العملة في نفس الأفق (ليُزال أثر الاتجاه العام للعملة).
+     الأحداث «القوية» تُحتسب بفاصل h شمعة بين كل حدث وآخر لتقليل التداخل. */
+  function validateInflow(cs, o = {}) {
+    const H = o.horizons || [6, 12, 24], start = o.start || 60, n = cs.length;
+    const base = {}, events = {}, buckets = {}, lastEv = {};
+    H.forEach((h) => {
+      const r = []; for (let i = start; i + h < n; i++) r.push(cs[i + h].c / cs[i].c - 1);
+      base[h] = mean(r); events[h] = []; buckets[h] = [[], [], [], []]; lastEv[h] = -1e9;
+    });
+    for (let i = start; i < n - 1; i++) {
+      const f = liquidityInflow(cs.slice(Math.max(0, i - 49), i + 1));
+      const b = f.score < 30 ? 0 : f.score < 50 ? 1 : f.score < 70 ? 2 : 3;
+      const strong = f.label === 'دخول سيولة قوي';
+      for (const h of H) {
+        if (i + h >= n) continue;
+        const ex = cs[i + h].c / cs[i].c - 1 - base[h];
+        buckets[h][b].push(ex);
+        if (strong && i - lastEv[h] >= h) { events[h].push(ex); lastEv[h] = i; }
+      }
+    }
+    return { H, events, buckets, base };
+  }
+  // إحصاءات مجموعة عوائد زائدة: العدد، المتوسط، نسبة الإيجابي، إحصاء t
+  function summarizeExcess(a) {
+    const nn = a.length; if (!nn) return { n: 0, mean: 0, hit: 0, t: 0 };
+    const m = mean(a), sd = Math.sqrt(mean(a.map((x) => (x - m) ** 2)) * nn / Math.max(1, nn - 1));
+    return { n: nn, mean: m, hit: a.filter((x) => x > 0).length / nn, t: sd > 0 ? m / (sd / Math.sqrt(nn)) : 0 };
+  }
+
   function fmt(p) {
     if (!isFinite(p)) return '-';
     if (p >= 1000) return p.toFixed(2);
@@ -403,5 +434,5 @@
     };
   }
 
-  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, managePosition, touchProb, normCdf, fmt, logReturnStd };
+  return { parseKlines, ema, rsi, atr, volumeProfile, swingPoints, buildLevels, liquidityInflow, analyze, backtest, validateInflow, summarizeExcess, managePosition, touchProb, normCdf, fmt, logReturnStd };
 });

@@ -75,4 +75,28 @@ m = A.managePosition(pos, 121, false); assert.strictEqual(m.action, 'EXIT'); ass
 assert(Math.abs(A.managePosition({ entry: 100, stop0: 95, stop: 95, targets: [105, 110, 120], hits: 0 }, 110, false).R - 2) < 1e-9, 'R=2');
 m = A.managePosition({ entry: 100, stop0: 95, stop: 95, targets: [105, 110, 120], hits: 0 }, 102, true); assert.strictEqual(m.action, 'EXIT');
 for (let i = 250; i < 1000; i += 5) { const r = A.analyze(cs.slice(0, i)); if (r.plan) assert(r.plan.maxEntry > r.plan.entry && r.plan.maxEntry < r.plan.targets[0].price); }
+// 7) اختبار دقة السيولة: يجب أن يكتشف ميزة مزروعة، ولا يخترع ميزة في بيانات عشوائية
+function flowSeries(n, seed, informed) {
+  let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const out = []; let p = 100, boost = 0;
+  for (let i = 0; i < n; i++) {
+    const burst = rnd() < 0.04; // دفعة شراء عنيفة
+    const qv = 1e6 * (0.7 + rnd() * 0.6) * (burst ? 4 : 1);
+    const br = burst ? 0.75 : Math.min(0.95, Math.max(0.05, 0.5 + (rnd() - 0.5) * 0.12));
+    if (burst && informed) boost = 0.004; // بعد الدفعة يرتفع السعر تدريجياً (ميزة حقيقية)
+    const o = p; p *= 1 + (rnd() - 0.5) * 0.012 + boost; boost *= 0.85;
+    out.push({ t: i * 3600e3, o, h: Math.max(o, p) * 1.001, l: Math.min(o, p) * 0.999, c: p, v: qv / p, qv, n: 1, tbv: 0, tbq: qv * br });
+  }
+  return out;
+}
+function pooled(informed) {
+  const acc = { 12: [] };
+  for (let sd = 1; sd <= 12; sd++) { const v = A.validateInflow(flowSeries(1500, sd * 7, informed), { horizons: [12] }); acc[12].push(...v.events[12]); }
+  return A.summarizeExcess(acc[12]);
+}
+const withEdge = pooled(true), noEdge = pooled(false);
+console.log('سيولة مع ميزة مزروعة:', withEdge.n, 'حدث، متوسط', (withEdge.mean * 100).toFixed(2) + '%', 't =', withEdge.t.toFixed(1));
+console.log('سيولة بدون ميزة      :', noEdge.n, 'حدث، متوسط', (noEdge.mean * 100).toFixed(2) + '%', 't =', noEdge.t.toFixed(1));
+assert(withEdge.n > 30 && withEdge.t > 3, 'يجب اكتشاف الميزة المزروعة');
+assert(Math.abs(noEdge.t) < 3, 'يجب ألا يخترع ميزة في بيانات عشوائية');
 console.log('كل الاختبارات نجحت ✔');

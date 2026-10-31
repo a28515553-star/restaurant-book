@@ -13,6 +13,7 @@
     set(k, v) { try { localStorage.setItem('sc_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
   };
 
+  let valHtml = '';
   let rows = [], live = {}, tab = 'enter', sortKey = 'flow', sortDir = -1, detailSym = null;
   let ws1 = null, ws2 = null, timer = null, prevState = {}, firstScan = true, lastSig = '', batchOut = null, scanning = false;
   let positions = store.get('pos', []), history = store.get('hist', []);
@@ -298,11 +299,13 @@
   function btHtml() {
     const head = `<div class="cd full"><b>باك تست شامل</b><div class="mut sm">يختبر استراتيجية الدخول على آخر 1000 شمعة لكل عملة في القائمة (خروج عند الهدف 2 أو الوقف، عمولة 0.1% بكل اتجاه).</div>
       <div class="act"><button id="batch" class="pri" data-a="batch">شغّل الباك تست الشامل</button></div></div>`;
-    if (!batchOut) return head;
+    const vcard = `<div class="cd full"><b>اختبار دقة «دخول السيولة»</b><div class="mut sm">يمر على آخر 1000 شمعة لكل عملة في القائمة، ويقيس ما حدث للسعر بعد كل مرة قال فيها التطبيق «دخول سيولة قوي»، مقارنةً بالعائد المعتاد لنفس العملة. إذا لم يتفوق بوضوح فالمؤشر لا يستحق الاعتماد عليه.</div>
+      <div class="act"><button id="vbtn" class="pri" data-a="validate">شغّل اختبار السيولة</button></div>${valHtml}</div>`;
+    if (!batchOut) return head + vcard;
     const ok = batchOut.filter((x) => x.b.count >= 10).sort((x, y) => y.b.avgR - x.b.avgR), few = batchOut.filter((x) => x.b.count < 10);
     const row = ({ r, b }) => `<tr class="r" data-a="detail" data-s="${r.symbol}"><td><b>${name(r.symbol)}</b></td><td>${b.count}</td><td>${pct(b.winRate, 0)}</td>
       <td class="${b.avgR >= 0 ? 'up' : 'dn'}">${b.avgR.toFixed(2)}R</td><td>${b.totalR.toFixed(1)}R</td><td>${b.maxDD.toFixed(1)}R</td><td><span class="tag ${r.signal}">${LBL[r.signal]}</span></td></tr>`;
-    return head + `<div class="cd full"><div class="mut sm">مرتبة بمتوسط R لكل صفقة، ويُعتمد فقط ما فيه 10 صفقات أو أكثر. الأفضل تاريخياً لا يضمن الأفضل مستقبلاً.</div>
+    return head + vcard + `<div class="cd full"><div class="mut sm">مرتبة بمتوسط R لكل صفقة، ويُعتمد فقط ما فيه 10 صفقات أو أكثر. الأفضل تاريخياً لا يضمن الأفضل مستقبلاً.</div>
       <div class="tbl"><table><thead><tr><th>العملة</th><th>الصفقات</th><th>النجاح</th><th>متوسط R</th><th>المجموع</th><th>أقصى تراجع</th><th>الآن</th></tr></thead>
       <tbody>${ok.map(row).join('') || '<tr><td colspan="7" class="mut">لا توجد عملة بصفقات كافية.</td></tr>'}</tbody></table></div>
       ${few.length ? `<div class="mut sm">صفقات قليلة (غير موثوقة): ${few.map((x) => name(x.r.symbol) + ' (' + x.b.count + ')').join('، ')}</div>` : ''}</div>`;
@@ -369,6 +372,37 @@
       setStatus(`باك تست شامل ${++done}/${list.length}...`);
     });
     batchOut = out; setStatus(`اكتمل الباك تست الشامل لـ ${out.length} عملة.`); lastSig = ''; render();
+  }
+
+
+  async function validateLiquidity() {
+    if (!rows.length) { setStatus('افحص السوق أولاً.'); return; }
+    const btn = $('vbtn'); if (btn) btn.disabled = true;
+    const H = [6, 12, 24], ev = { 6: [], 12: [], 24: [] }, bk = { 6: [[], [], [], []], 12: [[], [], [], []], 24: [[], [], [], []] };
+    let done = 0;
+    await pool([...rows], 4, async (r) => {
+      try {
+        const cs = await getKlines(r.symbol, $('tf').value, 1000);
+        await new Promise((res) => setTimeout(res, 0));
+        const v = Analysis.validateInflow(cs, { horizons: H });
+        H.forEach((h) => { ev[h].push(...v.events[h]); v.buckets[h].forEach((a, i) => bk[h][i].push(...a)); });
+      } catch (e) { /* تجاهل */ }
+      setStatus(`اختبار السيولة ${++done}/${rows.length}...`);
+    });
+    const S = Analysis.summarizeExcess, fee = 0.002;
+    const verdict = (x) => x.n < 30 ? ['عينة صغيرة (أقل من 30 حدثاً): لا يمكن الحكم', 'mut']
+      : x.t >= 2 && x.mean > fee ? ['ميزة محتملة: العائد الزائد يتجاوز العمولة وإحصاء t مرتفع', 'up']
+      : x.t >= 2 ? ['ميزة موجودة لكنها أقل من تكلفة العمولة (0.2%)', 'acc']
+      : ['لا دليل على ميزة: النتيجة قد تكون صدفة', 'dn'];
+    const rowsH = H.map((h) => { const x = S(ev[h]); return `<tr><td>بعد ${h} شمعة</td><td>${x.n}</td><td class="${x.mean >= 0 ? 'up' : 'dn'}">${(x.mean * 100).toFixed(2)}%</td><td>${pct(x.hit, 0)}</td><td>${x.t.toFixed(1)}</td><td class="${verdict(x)[1]}">${verdict(x)[0]}</td></tr>`; }).join('');
+    const names = ['0-29', '30-49', '50-69', '70+'];
+    const rowsB = names.map((nm, i) => `<tr><td>${nm}</td>${H.map((h) => { const x = S(bk[h][i]); return `<td class="${x.mean >= 0 ? 'up' : 'dn'}">${(x.mean * 100).toFixed(2)}% <span class="mut sm">(${x.n})</span></td>`; }).join('')}</tr>`).join('');
+    valHtml = `<h4>الأحداث «دخول سيولة قوي» (العائد الزائد عن المعتاد)</h4>
+      <div class="tbl"><table><thead><tr><th>الأفق</th><th>الأحداث</th><th>متوسط الزيادة</th><th>نسبة الإيجابي</th><th>t</th><th>الحكم</th></tr></thead><tbody>${rowsH}</tbody></table></div>
+      <h4>حسب درجة السيولة (يجب أن يرتفع العائد مع الدرجة إن كان المؤشر مفيداً)</h4>
+      <div class="tbl"><table><thead><tr><th>الدرجة</th>${H.map((h) => `<th>بعد ${h}</th>`).join('')}</tr></thead><tbody>${rowsB}</tbody></table></div>
+      <div class="note">t أكبر من 2 تعني أن الفرق غالباً ليس صدفة. الأحداث تُحسب بفاصل أفق كامل بينها لتقليل التداخل، لكن العملات ترتبط ببعضها، فاعتبر t تقريبياً. أداء الماضي لا يضمن المستقبل.</div>`;
+    setStatus('اكتمل اختبار السيولة.'); lastSig = ''; render();
   }
 
   function drawChart(cv, all, a, livePrice) {
@@ -439,6 +473,7 @@
     } else if (a === 'close') closePosition(i);
     else if (a === 'dismiss') { const p = positions.find((x) => x.id === i); if (p) { p.note = ''; p.noteAct = ''; savePos(); lastSig = ''; render(); } }
     else if (a === 'batch') batchBacktest();
+    else if (a === 'validate') validateLiquidity();
   });
   $('ov').addEventListener('click', (e) => {
     const el = e.target.closest('[data-a]'); if (!el) return;
@@ -447,7 +482,7 @@
   });
   $('tabs').onclick = (e) => { const b = e.target.closest('button[data-t]'); if (b) { tab = b.dataset.t; render(); } };
   $('scan').onclick = scan;
-  $('tf').onchange = () => { rows = []; prevState = {}; firstScan = true; batchOut = null; lastSig = ''; render(); setStatus('تغيّر الإطار الزمني. اضغط «فحص السوق».'); };
+  $('tf').onchange = () => { valHtml = ''; rows = []; prevState = {}; firstScan = true; batchOut = null; lastSig = ''; render(); setStatus('تغيّر الإطار الزمني. اضغط «فحص السوق».'); };
   $('alerts').onchange = (e) => { if (e.target.checked && window.Notification && Notification.permission === 'default') Notification.requestPermission(); beep(); };
   $('auto').onchange = (e) => { clearInterval(timer); if (e.target.checked) timer = setInterval(scan, 5 * 60 * 1000); store.set('auto', e.target.checked); };
   ['capital', 'risk'].forEach((id) => { $(id).value = store.get(id, $(id).value); $(id).onchange = () => { store.set(id, $(id).value); lastSig = ''; render(); }; });
