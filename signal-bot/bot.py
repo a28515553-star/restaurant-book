@@ -24,7 +24,7 @@ import requests
 
 HERE = Path(__file__).resolve().parent
 STATE_FILE = HERE / "state.json"
-BASE_URLS = ["https://data-api.binance.vision", "https://api.binance.com"]
+BASE_URLS = ["https://data-api.binance.vision", "https://api.binance.com", "https://api.binance.us"]
 FEE_ROUND_TRIP = 0.2  # % (0.1% دخول + 0.1% خروج)
 
 

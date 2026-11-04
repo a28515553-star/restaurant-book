@@ -1,0 +1,33 @@
+name: Stoch RSI Telegram Bot
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "أرسل رسالة تجربة"
+        type: boolean
+        default: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r signal-bot/requirements.txt
+      - name: Scan and alert
+        working-directory: signal-bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SYMBOLS: ${{ vars.SYMBOLS }}
+          INTERVAL: ${{ vars.INTERVAL }}
+          LEVEL: ${{ vars.LEVEL }}
+          WINDOW_MIN: "15"
+          TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test && '1' || '0' }}
+        run: python stoch_bot.py
