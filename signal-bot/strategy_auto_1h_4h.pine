@@ -3,6 +3,12 @@ strategy("Auto Swing 1H-4H", overlay=true, initial_capital=1000,
      default_qty_type=strategy.percent_of_equity, default_qty_value=100,
      commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
 
+tpAtr   = input.float(2.0, "الهدف (xATR)", step=0.1)
+slAtr   = input.float(1.5, "الوقف (xATR)", step=0.1)
+useBe   = input.bool(true, "نقل الوقف للدخول")
+beFrac  = input.float(0.6, "انقل الوقف بعد الوصول لنسبة من الهدف", step=0.1)
+maxBars = input.int(30, "اخرج بعد عدد شموع")
+
 // فريم الاتجاه تلقائي: شارت ساعة -> 4 ساعات، شارت 4 ساعات -> يومي
 tfSec = timeframe.in_seconds()
 htf   = tfSec <= 3600 ? "240" : "D"
@@ -45,11 +51,11 @@ var float bePrice = na
 var int entryBar = na
 
 if longCond and strategy.position_size == 0
-    slDist = math.min(1.5 * atr, close * 0.08)
-    tpDist = math.max(2.0 * atr, close * minTp / 100)
+    slDist = math.min(slAtr * atr, close * 0.08)
+    tpDist = math.max(tpAtr * atr, close * minTp / 100)
     slPrice  := close - slDist
     tpPrice  := close + tpDist
-    bePrice  := close + tpDist * 0.6
+    bePrice  := close + tpDist * beFrac
     entryBar := bar_index
     strategy.entry("L", strategy.long)
     label.new(bar_index, low, "BUY\nهدف +" + str.tostring(tpDist / close * 100, "#.#") + "%\nوقف -" + str.tostring(slDist / close * 100, "#.#") + "%",
@@ -57,10 +63,10 @@ if longCond and strategy.position_size == 0
 
 if strategy.position_size > 0
     ep = strategy.position_avg_price
-    if high >= bePrice
+    if useBe and high >= bePrice
         slPrice := math.max(slPrice, ep * (1 + costPct / 100))
     strategy.exit("XL", "L", limit=tpPrice, stop=slPrice)
-    if bar_index - entryBar >= 30
+    if bar_index - entryBar >= maxBars
         strategy.close("L", comment="انتهى الوقت")
 
 plot(ema20,  "EMA20",  color.new(color.blue, 40))
