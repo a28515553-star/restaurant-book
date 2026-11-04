@@ -42,12 +42,12 @@ alertcondition(sig, "إشارة Stoch RSI (عملة الشارت)", "{{ticker}}:
 
 if useScan and barstate.isconfirmed
     msg = ""
-    msg := g1 ? msg + syminfo.ticker(s1) + " " : msg
-    msg := g2 ? msg + syminfo.ticker(s2) + " " : msg
-    msg := g3 ? msg + syminfo.ticker(s3) + " " : msg
-    msg := g4 ? msg + syminfo.ticker(s4) + " " : msg
-    msg := g5 ? msg + syminfo.ticker(s5) + " " : msg
-    msg := g6 ? msg + syminfo.ticker(s6) + " " : msg
+    msg := g1 ? msg + str.replace(s1, "BINANCE:", "") + " " : msg
+    msg := g2 ? msg + str.replace(s2, "BINANCE:", "") + " " : msg
+    msg := g3 ? msg + str.replace(s3, "BINANCE:", "") + " " : msg
+    msg := g4 ? msg + str.replace(s4, "BINANCE:", "") + " " : msg
+    msg := g5 ? msg + str.replace(s5, "BINANCE:", "") + " " : msg
+    msg := g6 ? msg + str.replace(s6, "BINANCE:", "") + " " : msg
     if msg != ""
         alert("إشارة Stoch RSI تحت " + str.tostring(lvl) + " على فريم " + timeframe.period + ": " + msg, alert.freq_once_per_bar_close)
 
@@ -61,9 +61,9 @@ row(i, name, kv, g) =>
 if barstate.islast and useScan
     table.cell(t, 0, 0, "العملة", text_size=size.small)
     table.cell(t, 1, 0, "K", text_size=size.small)
-    row(1, syminfo.ticker(s1), k1, g1)
-    row(2, syminfo.ticker(s2), k2, g2)
-    row(3, syminfo.ticker(s3), k3, g3)
-    row(4, syminfo.ticker(s4), k4, g4)
-    row(5, syminfo.ticker(s5), k5, g5)
-    row(6, syminfo.ticker(s6), k6, g6)
+    row(1, str.replace(s1, "BINANCE:", ""), k1, g1)
+    row(2, str.replace(s2, "BINANCE:", ""), k2, g2)
+    row(3, str.replace(s3, "BINANCE:", ""), k3, g3)
+    row(4, str.replace(s4, "BINANCE:", ""), k4, g4)
+    row(5, str.replace(s5, "BINANCE:", ""), k5, g5)
+    row(6, str.replace(s6, "BINANCE:", ""), k6, g6)
