@@ -1,0 +1,62 @@
+//@version=5
+strategy("Small Coin Sniper v3", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+atrSl   = input.float(1.5, "الوقف (xATR)", step=0.1)
+atrTp   = input.float(2.0, "الهدف (xATR)", step=0.1)
+minTp   = input.float(1.5, "أقل هدف %", step=0.1)
+maxSl   = input.float(3.0, "أقصى وقف %", step=0.1)
+bePct   = input.float(1.0, "انقل الوقف للدخول بعد ربح %", step=0.1)
+htf     = input.timeframe("60", "فريم الاتجاه")
+useBtc  = input.bool(true, "فلتر البيتكوين")
+pumpPct = input.float(8.0, "تجاهل بعد ضخ أكبر من % (آخر 24 شمعة)", step=0.5)
+
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+atr    = ta.atr(14)
+hEma50   = request.security(syminfo.tickerid, htf, ta.ema(close, 50)[1], lookahead=barmerge.lookahead_on)
+hEma200  = request.security(syminfo.tickerid, htf, ta.ema(close, 200)[1], lookahead=barmerge.lookahead_on)
+btcClose = request.security("BINANCE:BTCUSDT", htf, close[1], lookahead=barmerge.lookahead_on)
+btcEma50 = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 50)[1], lookahead=barmerge.lookahead_on)
+btcOk    = not useBtc or btcClose > btcEma50
+
+trendUp = close > ema200 and ema50 > ema200 and hEma50 > hEma200
+
+rsi = ta.rsi(close, 14)
+k = ta.sma(ta.stoch(rsi, rsi, rsi, 14), 3)
+d = ta.sma(k, 3)
+stochOk = ta.crossover(k, d) and ta.lowest(k, 5) < 25
+rsiOk   = rsi > 40 and rsi < 65
+[macdLine, sigLine, hist] = ta.macd(close, 12, 26, 9)
+macdOk  = hist > hist[1]
+volOk   = volume > ta.sma(volume, 20)
+pullback   = ta.lowest(low, 5) <= ema20
+noPump     = (ta.highest(high, 24) / ta.lowest(low, 24) - 1) * 100 < pumpPct
+bullCandle = close > open
+
+longCond = trendUp and btcOk and stochOk and rsiOk and macdOk and volOk and pullback and noPump and bullCandle
+
+var float slPrice = na
+var float tpPrice = na
+
+if longCond and strategy.position_size == 0
+    slDist = math.min(atrSl * atr, close * maxSl / 100)
+    tpDist = math.max(atrTp * atr, close * minTp / 100)
+    slPrice := close - slDist
+    tpPrice := close + tpDist
+    strategy.entry("L", strategy.long)
+
+if strategy.position_size > 0
+    entryPrice = strategy.position_avg_price
+    if high >= entryPrice * (1 + bePct / 100)
+        slPrice := math.max(slPrice, entryPrice * 1.003)
+    strategy.exit("XL", "L", limit=tpPrice, stop=slPrice)
+
+plot(ema50,  "EMA50",  color.orange)
+plot(ema200, "EMA200", color.red, 2)
+plot(strategy.position_size > 0 ? tpPrice : na, "الهدف", color.lime, style=plot.style_linebr)
+plot(strategy.position_size > 0 ? slPrice : na, "الوقف", color.red, style=plot.style_linebr)
+plotshape(longCond, "شراء", shape.triangleup, location.belowbar, color.lime, size=size.small, text="BUY")
+alertcondition(longCond, "إشارة شراء", "إشارة شراء على {{ticker}} بسعر {{close}}")
