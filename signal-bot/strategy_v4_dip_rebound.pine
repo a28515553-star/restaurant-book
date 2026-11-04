@@ -1,0 +1,50 @@
+//@version=5
+strategy("Dip Rebound v4", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+bbLen   = input.int(20, "طول بولينجر")
+bbMult  = input.float(2.0, "انحراف بولينجر", step=0.1)
+rsiLv   = input.int(30, "مستوى تشبع البيع RSI")
+volMul  = input.float(1.5, "الفوليوم أكبر من متوسطه بـ (x)", step=0.1)
+minTp   = input.float(1.5, "أقل هدف %", step=0.1)
+maxSl   = input.float(3.0, "أقصى وقف %", step=0.1)
+maxBars = input.int(24, "اخرج بعد عدد شموع")
+useBtc  = input.bool(true, "فلتر البيتكوين")
+
+[basis, upper, lower] = ta.bb(close, bbLen, bbMult)
+rsi     = ta.rsi(close, 14)
+atr     = ta.atr(14)
+low3    = ta.lowest(low, 3)
+volAvg  = ta.sma(volume, 20)
+btc     = request.security("BINANCE:BTCUSDT", timeframe.period, close)
+btcOk   = not useBtc or btc >= btc[16] * 0.98
+
+dipped  = low[1] < lower[1] or low[2] < lower[2]
+rebound = close > lower and close > open and close > close[1]
+rsiOk   = ta.lowest(rsi, 3) < rsiLv and rsi > rsi[1]
+volOk   = ta.highest(volume, 3) > volMul * volAvg
+
+longCond = dipped and rebound and rsiOk and volOk and btcOk
+
+var float slPrice = na
+var float tpPrice = na
+var int entryBar = na
+
+if longCond and strategy.position_size == 0
+    slPrice := math.max(low3 - 0.5 * atr, close * (1 - maxSl / 100))
+    tpPrice := math.max(basis, close * (1 + minTp / 100))
+    entryBar := bar_index
+    strategy.entry("L", strategy.long)
+
+if strategy.position_size > 0
+    strategy.exit("XL", "L", limit=tpPrice, stop=slPrice)
+    if bar_index - entryBar >= maxBars
+        strategy.close("L", comment="انتهى الوقت")
+
+plot(basis, "الوسط", color.gray)
+plot(lower, "الحد السفلي", color.teal)
+plot(strategy.position_size > 0 ? tpPrice : na, "الهدف", color.lime, style=plot.style_linebr)
+plot(strategy.position_size > 0 ? slPrice : na, "الوقف", color.red, style=plot.style_linebr)
+plotshape(longCond, "شراء", shape.triangleup, location.belowbar, color.lime, size=size.small, text="BUY")
+alertcondition(longCond, "إشارة شراء", "ارتداد من القاع على {{ticker}} بسعر {{close}}")

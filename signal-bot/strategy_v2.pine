@@ -1,0 +1,48 @@
+//@version=5
+strategy("Spot Pullback Sniper v2", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+tpPct   = input.float(1.0, "الهدف %", step=0.1) / 100
+slPct   = input.float(1.0, "وقف الخسارة %", step=0.1) / 100
+htf     = input.timeframe("60", "فريم الاتجاه")
+stochLv = input.int(30, "مستوى Stoch RSI", minval=5, maxval=50)
+useHtf  = input.bool(true,  "فلتر اتجاه الساعة")
+useMacd = input.bool(true,  "فلتر MACD")
+useAdx  = input.bool(false, "فلتر ADX")
+useVol  = input.bool(false, "فلتر الفوليوم")
+maxAtr  = input.float(1.5, "أقصى بعد عن EMA20 (xATR)", step=0.1)
+
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+hEma50  = request.security(syminfo.tickerid, htf, ta.ema(close, 50)[1], lookahead=barmerge.lookahead_on)
+hEma200 = request.security(syminfo.tickerid, htf, ta.ema(close, 200)[1], lookahead=barmerge.lookahead_on)
+trendUp = close > ema200 and ema50 > ema200 and (not useHtf or hEma50 > hEma200)
+
+rsi = ta.rsi(close, 14)
+k = ta.sma(ta.stoch(rsi, rsi, rsi, 14), 3)
+d = ta.sma(k, 3)
+stochOk = ta.crossover(k, d) and ta.lowest(k, 5) < stochLv
+rsiOk = rsi > 40 and rsi < 70
+
+[macdLine, sigLine, hist] = ta.macd(close, 12, 26, 9)
+macdOk = not useMacd or hist > hist[1]
+[diPlus, diMinus, adx] = ta.dmi(14, 14)
+adxOk = not useAdx or (adx > 20 and diPlus > diMinus)
+volOk = not useVol or volume > ta.sma(volume, 20)
+notLate = (close - ema20) < maxAtr * ta.atr(14)
+
+longCond = trendUp and stochOk and rsiOk and macdOk and adxOk and volOk and notLate
+
+if longCond and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+
+if strategy.position_size > 0
+    p = strategy.position_avg_price
+    strategy.exit("XL", "L", limit=p * (1 + tpPct), stop=p * (1 - slPct))
+
+plot(ema50,  "EMA50",  color.orange)
+plot(ema200, "EMA200", color.red, 2)
+plotshape(longCond, "شراء", shape.triangleup, location.belowbar, color.lime, size=size.small, text="BUY")
+alertcondition(longCond, "إشارة شراء", "إشارة شراء على {{ticker}} بسعر {{close}}")

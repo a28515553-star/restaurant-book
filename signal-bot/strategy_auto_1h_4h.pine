@@ -1,0 +1,77 @@
+//@version=5
+strategy("Auto Swing 1H-4H", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+tpAtr   = input.float(2.0, "الهدف (xATR)", step=0.1)
+slAtr   = input.float(1.5, "الوقف (xATR)", step=0.1)
+useBe   = input.bool(true, "نقل الوقف للدخول")
+beFrac  = input.float(0.6, "انقل الوقف بعد الوصول لنسبة من الهدف", step=0.1)
+maxBars = input.int(30, "اخرج بعد عدد شموع")
+
+// فريم الاتجاه تلقائي: شارت ساعة -> 4 ساعات، شارت 4 ساعات -> يومي
+tfSec = timeframe.in_seconds()
+htf   = tfSec <= 3600 ? "240" : "D"
+
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+atr    = ta.atr(14)
+
+hEma50  = request.security(syminfo.tickerid, htf, ta.ema(close, 50)[1], lookahead=barmerge.lookahead_on)
+hEma200 = request.security(syminfo.tickerid, htf, ta.ema(close, 200)[1], lookahead=barmerge.lookahead_on)
+
+// فلتر البيتكوين للعملات الأخرى
+isBtc    = syminfo.basecurrency == "BTC"
+btcClose = request.security("BINANCE:BTCUSDT", htf, close[1], lookahead=barmerge.lookahead_on)
+btcEma50 = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 50)[1], lookahead=barmerge.lookahead_on)
+btcOk    = isBtc or btcClose > btcEma50
+
+trendUp = close > ema200 and ema50 > ema200 and hEma50 > hEma200
+
+rsi = ta.rsi(close, 14)
+k = ta.sma(ta.stoch(rsi, rsi, rsi, 14), 3)
+d = ta.sma(k, 3)
+stochOk = ta.crossover(k, d) and ta.lowest(k, 5) < 30
+rsiOk   = rsi > 40 and rsi < 65
+[macdLine, sigLine, hist] = ta.macd(close, 12, 26, 9)
+macdOk  = hist > hist[1]
+pullback   = ta.lowest(low, 5) <= ema20
+bullCandle = close > open
+
+longCond = trendUp and btcOk and stochOk and rsiOk and macdOk and pullback and bullCandle
+
+// تكلفة الصفقة تلقائياً: عمولة 0.2% + فرق سعر خطوتين (كبير في العملات الرخيصة مثل HOT)
+costPct = 0.2 + 2 * syminfo.mintick / close * 100
+minTp   = math.max(0.8, costPct * 4)
+
+var float slPrice = na
+var float tpPrice = na
+var float bePrice = na
+var int entryBar = na
+
+if longCond and strategy.position_size == 0
+    slDist = math.min(slAtr * atr, close * 0.08)
+    tpDist = math.max(tpAtr * atr, close * minTp / 100)
+    slPrice  := close - slDist
+    tpPrice  := close + tpDist
+    bePrice  := close + tpDist * beFrac
+    entryBar := bar_index
+    strategy.entry("L", strategy.long)
+    label.new(bar_index, low, "BUY\nهدف +" + str.tostring(tpDist / close * 100, "#.#") + "%\nوقف -" + str.tostring(slDist / close * 100, "#.#") + "%",
+         style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+
+if strategy.position_size > 0
+    ep = strategy.position_avg_price
+    if useBe and high >= bePrice
+        slPrice := math.max(slPrice, ep * (1 + costPct / 100))
+    strategy.exit("XL", "L", limit=tpPrice, stop=slPrice)
+    if bar_index - entryBar >= maxBars
+        strategy.close("L", comment="انتهى الوقت")
+
+plot(ema20,  "EMA20",  color.new(color.blue, 40))
+plot(ema50,  "EMA50",  color.orange)
+plot(ema200, "EMA200", color.red, 2)
+plot(strategy.position_size > 0 ? tpPrice : na, "الهدف", color.lime, style=plot.style_linebr)
+plot(strategy.position_size > 0 ? slPrice : na, "الوقف", color.red, style=plot.style_linebr)
+alertcondition(longCond, "إشارة شراء", "إشارة شراء على {{ticker}} بسعر {{close}}")
