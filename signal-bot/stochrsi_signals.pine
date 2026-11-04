@@ -1,0 +1,69 @@
+//@version=5
+indicator("Stoch RSI Signals", overlay=false)
+
+lvl      = input.int(20, "مستوى التشبع", minval=5, maxval=50)
+mode     = input.string("تقاطع للأعلى تحت المستوى", "نوع الإشارة", options=["تقاطع للأعلى تحت المستوى", "دخول تحت المستوى"])
+useTrend = input.bool(false, "فقط إذا السعر فوق EMA200")
+useScan  = input.bool(true, "افحص قائمة العملات")
+s1 = input.symbol("BINANCE:BTCUSDT", "عملة 1")
+s2 = input.symbol("BINANCE:ETHUSDT", "عملة 2")
+s3 = input.symbol("BINANCE:SOLUSDT", "عملة 3")
+s4 = input.symbol("BINANCE:BNBUSDT", "عملة 4")
+s5 = input.symbol("BINANCE:XRPUSDT", "عملة 5")
+s6 = input.symbol("BINANCE:HOTUSDT", "عملة 6")
+
+stochSig() =>
+    r = ta.rsi(close, 14)
+    k = ta.sma(ta.stoch(r, r, r, 14), 3)
+    d = ta.sma(k, 3)
+    crossUp = ta.crossover(k, d) and math.min(k[1], d[1]) < lvl
+    goUnder = ta.crossunder(k, lvl)
+    trendOk = not useTrend or close > ta.ema(close, 200)
+    sig = (mode == "دخول تحت المستوى" ? goUnder : crossUp) and trendOk
+    [k, d, sig]
+
+// العملة اللي على الشارت
+[k, d, sig] = stochSig()
+plot(k, "K", color.blue, 2)
+plot(d, "D", color.orange)
+hline(lvl, "تشبع بيع", color.green, hline.style_dashed)
+hline(100 - lvl, "تشبع شراء", color.red, hline.style_dashed)
+bgcolor(sig ? color.new(color.green, 75) : na)
+plotshape(sig, "إشارة", shape.triangleup, location.bottom, color.green, size=size.small)
+alertcondition(sig, "إشارة Stoch RSI (عملة الشارت)", "{{ticker}}: إشارة Stoch RSI على فريم {{interval}} - السعر {{close}}")
+
+// فحص قائمة العملات على نفس فريم الشارت
+[k1, d1, g1] = request.security(s1, timeframe.period, stochSig())
+[k2, d2, g2] = request.security(s2, timeframe.period, stochSig())
+[k3, d3, g3] = request.security(s3, timeframe.period, stochSig())
+[k4, d4, g4] = request.security(s4, timeframe.period, stochSig())
+[k5, d5, g5] = request.security(s5, timeframe.period, stochSig())
+[k6, d6, g6] = request.security(s6, timeframe.period, stochSig())
+
+if useScan and barstate.isconfirmed
+    msg = ""
+    msg := g1 ? msg + syminfo.ticker(s1) + " " : msg
+    msg := g2 ? msg + syminfo.ticker(s2) + " " : msg
+    msg := g3 ? msg + syminfo.ticker(s3) + " " : msg
+    msg := g4 ? msg + syminfo.ticker(s4) + " " : msg
+    msg := g5 ? msg + syminfo.ticker(s5) + " " : msg
+    msg := g6 ? msg + syminfo.ticker(s6) + " " : msg
+    if msg != ""
+        alert("إشارة Stoch RSI تحت " + str.tostring(lvl) + " على فريم " + timeframe.period + ": " + msg, alert.freq_once_per_bar_close)
+
+// جدول يعرض قيمة K الحالية لكل عملة
+var table t = table.new(position.top_right, 2, 7, border_width=1)
+row(i, name, kv, g) =>
+    c = g ? color.new(color.green, 30) : kv < lvl ? color.new(color.orange, 40) : color.new(color.gray, 70)
+    table.cell(t, 0, i, name, text_color=color.white, bgcolor=c, text_size=size.small)
+    table.cell(t, 1, i, str.tostring(kv, "#"), text_color=color.white, bgcolor=c, text_size=size.small)
+
+if barstate.islast and useScan
+    table.cell(t, 0, 0, "العملة", text_size=size.small)
+    table.cell(t, 1, 0, "K", text_size=size.small)
+    row(1, syminfo.ticker(s1), k1, g1)
+    row(2, syminfo.ticker(s2), k2, g2)
+    row(3, syminfo.ticker(s3), k3, g3)
+    row(4, syminfo.ticker(s4), k4, g4)
+    row(5, syminfo.ticker(s5), k5, g5)
+    row(6, syminfo.ticker(s6), k6, g6)
