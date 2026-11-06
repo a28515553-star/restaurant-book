@@ -16,7 +16,7 @@
     LEVEL        مستوى التشبع (20)
     MIN_VOLUME   أقل سيولة يومية بالدولار للعملة (1000000) لاستبعاد العملات الميتة
     RSI_MAX      أعلى RSI مسموح (70)
-    WINDOW_MIN   ينبّه فقط على الشموع اللي أغلقت خلال هالدقائق (60)
+    WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
     TEST=1       يرسل رسالة تجربة
 """
@@ -120,7 +120,7 @@ def main() -> int:
     level = float(os.getenv("LEVEL") or 20)
     min_volume = float(os.getenv("MIN_VOLUME") or 1_000_000)
     rsi_max = float(os.getenv("RSI_MAX") or 70)
-    window = float(os.getenv("WINDOW_MIN") or 60)
+    window = float(os.getenv("WINDOW_MIN") or 90)
     state_file = os.getenv("STATE_FILE") or "state.json"
     sent = load_state(state_file)
     test = os.getenv("TEST") == "1"
@@ -133,6 +133,10 @@ def main() -> int:
     vol_of = dict(pairs)
     now_ms = time.time() * 1000
 
+    # الإشارة على شمعة مغلقة:
+    #   K كان تحت المستوى وبدأ يخترقه للأعلى + الماكدي إيجابي + RSI مو متشبع شراء
+    # نفحص كل الشموع اللي أغلقت خلال آخر WINDOW_MIN دقيقة، لأن GitHub ممكن يتأخر
+    # في التشغيل، وما نبي تضيع إشارة بين تشغيلين.
     def check(job):
         sym, interval = job
         try:
@@ -140,10 +144,20 @@ def main() -> int:
             if len(df) < 60:
                 return None
             r, k, hist = indicators(df["close"])
-            close_time = int(df["close_time"].iloc[-1])
-            return {"sym": sym, "tf": interval, "k_prev": k.iloc[-2], "k": k.iloc[-1],
-                    "rsi": r.iloc[-1], "hist": hist.iloc[-1], "price": df["close"].iloc[-1],
-                    "t": close_time, "ago": (now_ms - close_time) / 60000}
+            n = len(df)
+            hits = []
+            for i in range(n - 1, n - 9, -1):
+                t = int(df["close_time"].iloc[i])
+                ago = (now_ms - t) / 60000
+                if not test and ago > window:
+                    break
+                if k.iloc[i - 1] < level <= k.iloc[i] and hist.iloc[i] > 0 and r.iloc[i] < rsi_max:
+                    hits.append({"sym": sym, "tf": interval, "t": t, "ago": ago,
+                                 "k_prev": k.iloc[i - 1], "k": k.iloc[i], "rsi": r.iloc[i],
+                                 "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
+                if test:
+                    break
+            return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits}
         except Exception as e:
             print(f"{sym} {interval}: {e}", file=sys.stderr)
             return None
@@ -152,28 +166,29 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = [r for r in pool.map(check, jobs) if r]
 
-    # الإشارة على آخر شمعة مغلقة:
-    #   K كان تحت المستوى وبدأ يخترقه للأعلى + الماكدي إيجابي + RSI مو متشبع شراء
-    def is_signal(x):
-        return x["k_prev"] < level <= x["k"] and x["hist"] > 0 and x["rsi"] < rsi_max
-
     def key(x):
         return f'{x["sym"]}:{x["tf"]}:{x["t"]}'
 
-    signals = [x for x in results if is_signal(x) and (test or (
-        x["ago"] <= window and key(x) not in sent))]
+    signals = [h for x in results for h in x["hits"] if test or key(h) not in sent]
+
+    def line(x):
+        when = "الحين" if x["ago"] < 20 else f'قبل {x["ago"]:.0f} دقيقة'
+        price = f'السعر {fmt_price(x["price"])}'
+        if abs(x["price"] - x["price_sig"]) / x["price_sig"] > 0.001:
+            change = (x["price"] / x["price_sig"] - 1) * 100
+            price += f' (وقت الإشارة {fmt_price(x["price_sig"])}، {change:+.1f}%)'
+        return (f'🟢 {x["sym"][:-4]}  {price}\n'
+                f'    StochRSI {x["k_prev"]:.0f}→{x["k"]:.0f} | RSI {x["rsi"]:.0f} | MACD ✅ | {when}')
 
     for tf in intervals:
-        group = sorted([x for x in signals if x["tf"] == tf], key=lambda x: -vol_of.get(x["sym"], 0))
+        group = sorted([x for x in signals if x["tf"] == tf],
+                       key=lambda x: (x["ago"], -vol_of.get(x["sym"], 0)))
         if not group:
             continue
-        lines = [f'🟢 {x["sym"][:-4]}  السعر {fmt_price(x["price"])}\n'
-                 f'    StochRSI {x["k_prev"]:.0f}→{x["k"]:.0f} | RSI {x["rsi"]:.0f} | MACD ✅'
-                 for x in group]
         send_chunks(token, chat,
                     f"🚀 فرص شراء | فريم {tf}\n"
                     f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
-                    f"({len(group)} عملة)\n\n", lines)
+                    f"({len(group)} عملة)\n\n", [line(x) for x in group])
     if not test:
         for x in signals:
             sent[key(x)] = now_ms
