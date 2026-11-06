@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from bot import BASE_URLS, atr
+from bot import BASE_URLS, atr, ema
 from stoch_bot import indicators, usdt_pairs
 from trend import breakout_at
 
@@ -84,6 +84,9 @@ def simulate(df: pd.DataFrame, i: int, tp: float, sl: float, max_bars: int = MAX
     return (cl[last] / entry - 1) * 100 - FEE, last
 
 
+BTC_UP: dict[str, dict[float, bool]] = {}
+
+
 def run_coin(job):
     sym, tf = job
     out = []
@@ -95,33 +98,53 @@ def run_coin(job):
         r, k, hist = indicators(df["close"])
         a = atr(df).to_numpy()
         kk, hh, rr = k.to_numpy(), hist.to_numpy(), r.to_numpy()
+        close = df["close"].to_numpy()
+        e50, e200 = ema(df["close"], 50).to_numpy(), ema(df["close"], 200).to_numpy()
+        btc = BTC_UP.get(tf, {})
+        opens = df["open_time"].to_numpy()
         vol = df["volume"].to_numpy()
         vol_avg = pd.Series(vol).rolling(20).mean().shift(1).to_numpy()
         n = len(df)
-        busy = {"A": -1, "B": -1, "C": -1, "T1": -1, "TOP": -1, "RND": -1}
+        busy: dict[str, int] = {}
 
         def add(rule, i, tp, sl, max_bars=MAX_BARS):
-            if i <= busy[rule]:
+            if i <= busy.get(rule, -1):
                 return
             res = simulate(df, i, tp, sl, max_bars)
             if res:
-                out.append({"rule": rule, "tf": tf, "sym": sym, "pnl": res[0]})
+                out.append({"rule": rule, "tf": tf, "sym": sym, "pnl": res[0],
+                            "half": "old" if i < (200 + n) / 2 else "new"})
                 busy[rule] = res[1]
 
         for i in range(200, n - 1):
             nxt = df["open"].iat[i + 1]
+            # فلتر 1: العملة فوق EMA200 والبيتكوين فوق EMA200 (نفس الفريم)
+            f1 = close[i] > e200[i] and btc.get(opens[i], False)
+            # فلتر 2: فلتر 1 + EMA50 فوق EMA200 (ترند صاعد واضح)
+            f2 = f1 and e50[i] > e200[i]
             if kk[i - 1] < LEVEL <= kk[i] and hh[i] > 0 and rr[i] < RSI_MAX:
-                add("A", i, nxt * 1.01, nxt * 0.99)
-                add("B", i, nxt * 1.02, nxt * 0.99)
-                add("C", i, nxt + 1.5 * a[i], nxt - a[i])
+                rules = [("C0", True), ("C1", f1), ("C2", f2), ("B1", f1), ("B2", f2)]
+                for rule, ok in rules:
+                    if not ok:
+                        continue
+                    if rule.startswith("C"):
+                        add(rule, i, nxt + 1.5 * a[i], nxt - a[i])
+                    else:
+                        add(rule, i, nxt * 1.02, nxt * 0.99)
             if tf in ("1h", "4h") and vol_avg[i] > 0 and vol[i] >= 1.5 * vol_avg[i]:
                 window = df.iloc[max(0, i - 149):i + 1].reset_index(drop=True)
                 bo = breakout_at(window, len(window) - 1)
                 if bo:
-                    add("T1", i, bo["target"], bo["stop"], 100)
-                    add("TOP", i, bo["top"], bo["stop"], 100)
+                    add("TOP0", i, bo["top"], bo["stop"], 100)
+                    if f1:
+                        add("TOP1", i, bo["top"], bo["stop"], 100)
+                        add("T1_1", i, bo["target"], bo["stop"], 100)
+                    if f2:
+                        add("TOP2", i, bo["top"], bo["stop"], 100)
             if rng.random() < 0.02:
-                add("RND", i, nxt * 1.01, nxt * 0.99)
+                add("RND0", i, nxt + 1.5 * a[i], nxt - a[i])
+                if f1:
+                    add("RND1", i, nxt + 1.5 * a[i], nxt - a[i])
     except Exception as e:
         print(f"{sym} {tf}: {e}", file=sys.stderr)
     return out
@@ -143,23 +166,33 @@ def stats(trades: list[dict]) -> dict:
 
 
 NAMES = {
-    "A": "Stoch RSI — هدف 1% / وقف 1%",
-    "B": "Stoch RSI — هدف 2% / وقف 1%",
-    "C": "Stoch RSI — هدف 1.5×ATR / وقف 1×ATR",
-    "T1": "اختراق ترند — الهدف أقرب مقاومة",
-    "TOP": "اختراق ترند — الهدف قمة الترند",
-    "RND": "دخول عشوائي (للمقارنة) — هدف 1% / وقف 1%",
+    "C0": "Stoch RSI (ATR) — بدون فلتر",
+    "C1": "Stoch RSI (ATR) — فلتر 1",
+    "C2": "Stoch RSI (ATR) — فلتر 2",
+    "B1": "Stoch RSI (هدف 2% / وقف 1%) — فلتر 1",
+    "B2": "Stoch RSI (هدف 2% / وقف 1%) — فلتر 2",
+    "TOP0": "اختراق ترند (هدف القمة) — بدون فلتر",
+    "TOP1": "اختراق ترند (هدف القمة) — فلتر 1",
+    "TOP2": "اختراق ترند (هدف القمة) — فلتر 2",
+    "T1_1": "اختراق ترند (أقرب مقاومة) — فلتر 1",
+    "RND0": "عشوائي (ATR) — بدون فلتر",
+    "RND1": "عشوائي (ATR) — فلتر 1",
 }
 
 
 def main() -> int:
     pairs = [s for s, _ in usdt_pairs(5_000_000)][:COINS]
     print(f"عدد العملات: {len(pairs)} (أعلى سيولة) | الفريمات: {', '.join(HISTORY)} | العمولة {FEE}%")
+    for tf in HISTORY:
+        b = klines("BTCUSDT", tf, HISTORY[tf] + 400)
+        up = b["close"] > ema(b["close"], 200)
+        BTC_UP[tf] = dict(zip(b["open_time"].to_numpy(), up.to_numpy()))
+    print("فلتر 1: العملة فوق EMA200 والبيتكوين فوق EMA200 | فلتر 2: فلتر 1 + EMA50 فوق EMA200")
     jobs = [(s, tf) for tf in HISTORY for s in pairs]
     with ThreadPoolExecutor(max_workers=6) as pool:
         trades = [t for res in pool.map(run_coin, jobs) for t in res]
 
-    lines = ["| الاستراتيجية | الفريم | الصفقات | الرابحة | متوسط الصفقة | متوسط الربح | متوسط الخسارة | عامل الربح | أطول خسائر متتالية |",
+    lines = ["| الاستراتيجية | الفريم | الصفقات | الرابحة | متوسط الصفقة | عامل الربح | النصف الأقدم | النصف الأحدث | أطول خسائر |",
              "|---|---|---|---|---|---|---|---|---|"]
     for rule in NAMES:
         for tf in list(HISTORY) + ["الكل"]:
@@ -167,8 +200,11 @@ def main() -> int:
             s = stats(sel)
             if s["n"] == 0:
                 continue
+            old = stats([t for t in sel if t["half"] == "old"])
+            new = stats([t for t in sel if t["half"] == "new"])
+            fmt_half = lambda h: f'{h["avg"]:+.3f}% ({h["n"]})' if h["n"] else "-"
             lines.append(f'| {NAMES[rule]} | {tf} | {s["n"]} | {s["win"]:.1f}% | {s["avg"]:+.3f}% | '
-                         f'{s["avg_win"]:+.2f}% | {s["avg_loss"]:+.2f}% | {s["pf"]:.2f} | {s["streak"]} |')
+                         f'{s["pf"]:.2f} | {fmt_half(old)} | {fmt_half(new)} | {s["streak"]} |')
     report = "\n".join(lines)
     print(report)
     summary = os.getenv("GITHUB_STEP_SUMMARY")
