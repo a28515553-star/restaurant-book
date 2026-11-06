@@ -6,6 +6,9 @@
   - الماكدي إيجابي (خط الماكدي فوق خط الإشارة، الهيستوجرام موجب)
   - RSI مو في منطقة تشبع شراء (أقل من 70)
 
+ويرسل كمان تنبيه "اختراق ترند نازل" لما السعر يكسر خط الترند النازل للأعلى
+مع فوليوم عالي، ومعه الدعم (للوقف) وأقرب مقاومة (للهدف). التفاصيل في trend.py.
+
 مصمم يشتغل على GitHub Actions كل 5 دقائق بدون سيرفر، ويحفظ الإشارات المرسلة
 حتى ما تتكرر. ما ينفذ أي صفقة.
 
@@ -18,6 +21,7 @@
     RSI_MAX      أعلى RSI مسموح (70)
     WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
+    BREAKOUT_TF  فريمات تنبيه اختراق الترند (الافتراضي 1h,4h)، واكتب none لإيقافه
     TEST=1       يرسل رسالة تجربة
 """
 from __future__ import annotations
@@ -31,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from bot import BASE_URLS, ema, fetch_klines, load_env, rsi
+from trend import breakout_at
 
 STABLES = {"USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "PAX", "EUR", "AEUR", "EURI",
            "USDE", "XUSD", "USD1", "BFUSD", "PYUSD", "UST", "USTC", "SUSD", "GBP", "TRY", "BRL"}
@@ -125,6 +130,7 @@ def main() -> int:
     sent = load_state(state_file)
     test = os.getenv("TEST") == "1"
     sym_env = (os.getenv("SYMBOLS") or "ALL").strip().upper()
+    breakout_tfs = {i.strip() for i in (os.getenv("BREAKOUT_TF") or "1h,4h").split(",")}
 
     if sym_env in ("", "ALL"):
         pairs = usdt_pairs(min_volume)
@@ -145,7 +151,7 @@ def main() -> int:
                 return None
             r, k, hist = indicators(df["close"])
             n = len(df)
-            hits = []
+            hits, breaks = [], []
             for i in range(n - 1, n - 9, -1):
                 t = int(df["close_time"].iloc[i])
                 ago = (now_ms - t) / 60000
@@ -155,9 +161,14 @@ def main() -> int:
                     hits.append({"sym": sym, "tf": interval, "t": t, "ago": ago,
                                  "k_prev": k.iloc[i - 1], "k": k.iloc[i], "rsi": r.iloc[i],
                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
+                bo = breakout_at(df, i) if interval in breakout_tfs else None
+                if bo:
+                    bo.update({"sym": sym, "tf": interval, "t": t, "ago": ago,
+                               "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
+                    breaks.append(bo)
                 if test:
                     break
-            return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits}
+            return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits, "breaks": breaks}
         except Exception as e:
             print(f"{sym} {interval}: {e}", file=sys.stderr)
             return None
@@ -169,16 +180,34 @@ def main() -> int:
     def key(x):
         return f'{x["sym"]}:{x["tf"]}:{x["t"]}'
 
-    signals = [h for x in results for h in x["hits"] if test or key(h) not in sent]
+    def bkey(x):
+        return "TL:" + key(x)
 
-    def line(x):
+    signals = [h for x in results for h in x["hits"] if test or key(h) not in sent]
+    breaks = [h for x in results for h in x["breaks"] if test or bkey(h) not in sent]
+
+    def price_when(x):
         when = "الحين" if x["ago"] < 20 else f'قبل {x["ago"]:.0f} دقيقة'
         price = f'السعر {fmt_price(x["price"])}'
         if abs(x["price"] - x["price_sig"]) / x["price_sig"] > 0.001:
             change = (x["price"] / x["price_sig"] - 1) * 100
             price += f' (وقت الإشارة {fmt_price(x["price_sig"])}، {change:+.1f}%)'
+        return price, when
+
+    def line(x):
+        price, when = price_when(x)
         return (f'🟢 {x["sym"][:-4]}  {price}\n'
                 f'    StochRSI {x["k_prev"]:.0f}→{x["k"]:.0f} | RSI {x["rsi"]:.0f} | MACD ✅ | {when}')
+
+    def bline(x):
+        price, when = price_when(x)
+        rr = x["top_pct"] / x["stop_pct"]
+        return (f'📐 {x["sym"][:-4]}  {price} | {when}\n'
+                f'    كسر الترند النازل (عمره {x["bars"]} شمعة) بفوليوم {x["vol_x"]:.1f}x\n'
+                f'    🎯 الهدف {fmt_price(x["target"])} (+{x["target_pct"]:.1f}%)'
+                f' | قمة الترند {fmt_price(x["top"])} (+{x["top_pct"]:.1f}%)\n'
+                f'    🛑 الوقف {fmt_price(x["stop"])} (-{x["stop_pct"]:.1f}%) تحت الدعم {fmt_price(x["support"])}'
+                f'\n    ⚖️ الربح لقمة الترند أكبر من الخسارة {rr:.1f} مرة')
 
     for tf in intervals:
         group = sorted([x for x in signals if x["tf"] == tf],
@@ -189,9 +218,18 @@ def main() -> int:
                     f"🚀 فرص شراء | فريم {tf}\n"
                     f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
                     f"({len(group)} عملة)\n\n", [line(x) for x in group])
+        bgroup = sorted([x for x in breaks if x["tf"] == tf],
+                        key=lambda x: (x["ago"], -vol_of.get(x["sym"], 0)))
+        if bgroup:
+            send_chunks(token, chat,
+                        f"📐 اختراق ترند نازل | فريم {tf}\n"
+                        f"السعر كسر خط الترند النازل للأعلى مع فوليوم عالي\n"
+                        f"({len(bgroup)} عملة)\n\n", [bline(x) for x in bgroup])
     if not test:
         for x in signals:
             sent[key(x)] = now_ms
+        for x in breaks:
+            sent[bkey(x)] = now_ms
     save_state(state_file, sent, now_ms)
 
     if test:
@@ -199,15 +237,16 @@ def main() -> int:
         for tf in intervals:
             res = [x for x in results if x["tf"] == tf]
             low = sorted(res, key=lambda x: x["k"])[:5]
-            summary.append(f"⏱ فريم {tf}: فحص {len(res)} عملة، إشارات الحين "
-                           f'{sum(1 for x in signals if x["tf"] == tf)}\n'
+            summary.append(f"⏱ فريم {tf}: فحص {len(res)} عملة، إشارات Stoch RSI "
+                           f'{sum(1 for x in signals if x["tf"] == tf)}، اختراق ترند '
+                           f'{sum(1 for x in breaks if x["tf"] == tf)}\n'
                            "  أقل Stoch RSI: " + "، ".join(f'{x["sym"][:-4]} {x["k"]:.0f}' for x in low))
         send(token, chat,
              "✅ البوت يعمل على جميع عملات بينانس\n"
              f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
              f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary))
 
-    print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}")
+    print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}، اختراقات: {len(breaks)}")
     return 0 if results else 1
 
 
