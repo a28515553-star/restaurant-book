@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """بوت تيليجرام لإشارات Stoch RSI على جميع عملات بينانس.
 
-يفحص كل أزواج USDT في بينانس سبوت على الفريم المختار، ويرسل رسالة شراء لما:
+يفحص كل أزواج USDT في بينانس سبوت على فريمات 15 دقيقة وساعة و4 ساعات، ويرسل رسالة شراء لما:
   - خط K في Stoch RSI ينزل تحت مستوى التشبع (20) ثم يبدأ يخترقه للأعلى
   - الماكدي إيجابي (خط الماكدي فوق خط الإشارة، الهيستوجرام موجب)
   - RSI مو في منطقة تشبع شراء (أقل من 70)
@@ -12,7 +12,7 @@
 المتغيرات:
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (أسرار)
     SYMBOLS      ALL (الافتراضي) أو قائمة مثل BTCUSDT,ETHUSDT
-    INTERVAL     15m أو 1h أو 4h ...
+    INTERVAL     فريم واحد أو أكثر مفصولة بفاصلة (الافتراضي 15m,1h,4h)
     LEVEL        مستوى التشبع (20)
     MIN_VOLUME   أقل سيولة يومية بالدولار للعملة (1000000) لاستبعاد العملات الميتة
     RSI_MAX      أعلى RSI مسموح (70)
@@ -116,7 +116,7 @@ def main() -> int:
     load_env()
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    interval = (os.getenv("INTERVAL") or "15m").strip()
+    intervals = [i.strip() for i in (os.getenv("INTERVAL") or "15m,1h,4h").split(",") if i.strip()]
     level = float(os.getenv("LEVEL") or 20)
     min_volume = float(os.getenv("MIN_VOLUME") or 1_000_000)
     rsi_max = float(os.getenv("RSI_MAX") or 70)
@@ -131,59 +131,68 @@ def main() -> int:
     else:
         pairs = [(s.strip(), 0.0) for s in sym_env.split(",") if s.strip()]
     vol_of = dict(pairs)
-
     now_ms = time.time() * 1000
 
-    def check(sym: str):
+    def check(job):
+        sym, interval = job
         try:
             df = fetch_klines(sym, interval, 150)
             if len(df) < 60:
                 return None
             r, k, hist = indicators(df["close"])
             close_time = int(df["close_time"].iloc[-1])
-            return {"sym": sym, "k_prev": k.iloc[-2], "k": k.iloc[-1], "rsi": r.iloc[-1],
-                    "hist": hist.iloc[-1], "price": df["close"].iloc[-1], "t": close_time,
-                    "ago": (now_ms - close_time) / 60000}
+            return {"sym": sym, "tf": interval, "k_prev": k.iloc[-2], "k": k.iloc[-1],
+                    "rsi": r.iloc[-1], "hist": hist.iloc[-1], "price": df["close"].iloc[-1],
+                    "t": close_time, "ago": (now_ms - close_time) / 60000}
         except Exception as e:
-            print(f"{sym}: {e}", file=sys.stderr)
+            print(f"{sym} {interval}: {e}", file=sys.stderr)
             return None
 
+    jobs = [(sym, tf) for tf in intervals for sym, _ in pairs]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = [r for r in pool.map(check, [s for s, _ in pairs]) if r]
+        results = [r for r in pool.map(check, jobs) if r]
 
     # الإشارة على آخر شمعة مغلقة:
     #   K كان تحت المستوى وبدأ يخترقه للأعلى + الماكدي إيجابي + RSI مو متشبع شراء
     def is_signal(x):
         return x["k_prev"] < level <= x["k"] and x["hist"] > 0 and x["rsi"] < rsi_max
 
-    signals = [x for x in results if is_signal(x) and (test or (
-        x["ago"] <= window and f'{x["sym"]}:{x["t"]}' not in sent))]
-    signals.sort(key=lambda x: -vol_of.get(x["sym"], 0))
+    def key(x):
+        return f'{x["sym"]}:{x["tf"]}:{x["t"]}'
 
-    if signals:
+    signals = [x for x in results if is_signal(x) and (test or (
+        x["ago"] <= window and key(x) not in sent))]
+
+    for tf in intervals:
+        group = sorted([x for x in signals if x["tf"] == tf], key=lambda x: -vol_of.get(x["sym"], 0))
+        if not group:
+            continue
         lines = [f'🟢 {x["sym"][:-4]}  السعر {fmt_price(x["price"])}\n'
                  f'    StochRSI {x["k_prev"]:.0f}→{x["k"]:.0f} | RSI {x["rsi"]:.0f} | MACD ✅'
-                 for x in signals]
+                 for x in group]
         send_chunks(token, chat,
-                    f"🚀 فرص شراء | فريم {interval}\n"
+                    f"🚀 فرص شراء | فريم {tf}\n"
                     f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
-                    f"({len(signals)} عملة)\n\n", lines)
-        if not test:
-            for x in signals:
-                sent[f'{x["sym"]}:{x["t"]}'] = now_ms
+                    f"({len(group)} عملة)\n\n", lines)
+    if not test:
+        for x in signals:
+            sent[key(x)] = now_ms
     save_state(state_file, sent, now_ms)
 
     if test:
-        low = sorted(results, key=lambda x: x["k"])[:10]
+        summary = []
+        for tf in intervals:
+            res = [x for x in results if x["tf"] == tf]
+            low = sorted(res, key=lambda x: x["k"])[:5]
+            summary.append(f"⏱ فريم {tf}: فحص {len(res)} عملة، إشارات الحين "
+                           f'{sum(1 for x in signals if x["tf"] == tf)}\n'
+                           "  أقل Stoch RSI: " + "، ".join(f'{x["sym"][:-4]} {x["k"]:.0f}' for x in low))
         send(token, chat,
              "✅ البوت يعمل على جميع عملات بينانس\n"
-             f"الفريم: {interval} | Stoch RSI تحت {level:g} | RSI أقل من {rsi_max:g} | ماكدي إيجابي\n"
-             f"تم فحص {len(results)} عملة (سيولة يومية فوق {min_volume:,.0f}$)\n"
-             f"إشارات الحين: {len(signals)}\n\n"
-             "أقل 10 عملات في Stoch RSI:\n"
-             + "\n".join(f'{x["sym"][:-4]}: K={x["k"]:.0f}' for x in low))
+             f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
+             f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary))
 
-    print(f"فحص {len(results)} من {len(pairs)} عملة، إشارات: {len(signals)}")
+    print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}")
     return 0 if results else 1
 
 
