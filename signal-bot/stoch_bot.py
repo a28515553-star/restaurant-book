@@ -5,6 +5,7 @@
   - خط K في Stoch RSI ينزل تحت مستوى التشبع (20) ثم يبدأ يخترقه للأعلى
   - الماكدي إيجابي (خط الماكدي فوق خط الإشارة، الهيستوجرام موجب)
   - RSI مو في منطقة تشبع شراء (أقل من 70)
+  - السعر فوق EMA50 وفوق EMA200 (ترند صاعد)
 
 ويرسل كمان تنبيه "اختراق ترند نازل" لما السعر يكسر خط الترند النازل للأعلى
 مع فوليوم عالي، ومعه الدعم (للوقف) وأقرب مقاومة (للهدف). التفاصيل في trend.py.
@@ -19,6 +20,7 @@
     LEVEL        مستوى التشبع (20)
     MIN_VOLUME   أقل سيولة يومية بالدولار للعملة (1000000) لاستبعاد العملات الميتة
     RSI_MAX      أعلى RSI مسموح (70)
+    TREND_FILTER 1 (الافتراضي): الشراء بس إذا السعر فوق EMA50 وفوق EMA200، و0 لإيقافه
     WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
     BREAKOUT_TF  فريمات تنبيه اختراق الترند (الافتراضي 1h,4h)، واكتب none لإيقافه
@@ -125,6 +127,7 @@ def main() -> int:
     level = float(os.getenv("LEVEL") or 20)
     min_volume = float(os.getenv("MIN_VOLUME") or 1_000_000)
     rsi_max = float(os.getenv("RSI_MAX") or 70)
+    trend_filter = (os.getenv("TREND_FILTER") or "1").strip() != "0"
     window = float(os.getenv("WINDOW_MIN") or 90)
     state_file = os.getenv("STATE_FILE") or "state.json"
     sent = load_state(state_file)
@@ -146,10 +149,11 @@ def main() -> int:
     def check(job):
         sym, interval = job
         try:
-            df = fetch_klines(sym, interval, 150)
+            df = fetch_klines(sym, interval, 300)
             if len(df) < 60:
                 return None
             r, k, hist = indicators(df["close"])
+            e50, e200 = ema(df["close"], 50), ema(df["close"], 200)
             n = len(df)
             hits, breaks = [], []
             for i in range(n - 1, n - 9, -1):
@@ -157,7 +161,9 @@ def main() -> int:
                 ago = (now_ms - t) / 60000
                 if not test and ago > window:
                     break
-                if k.iloc[i - 1] < level <= k.iloc[i] and hist.iloc[i] > 0 and r.iloc[i] < rsi_max:
+                c = df["close"].iloc[i]
+                uptrend = not trend_filter or (len(df) >= 250 and c > e50.iloc[i] and c > e200.iloc[i])
+                if k.iloc[i - 1] < level <= k.iloc[i] and hist.iloc[i] > 0 and r.iloc[i] < rsi_max and uptrend:
                     hits.append({"sym": sym, "tf": interval, "t": t, "ago": ago,
                                  "k_prev": k.iloc[i - 1], "k": k.iloc[i], "rsi": r.iloc[i],
                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
@@ -216,7 +222,7 @@ def main() -> int:
             continue
         send_chunks(token, chat,
                     f"🚀 فرص شراء | فريم {tf}\n"
-                    f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
+                    f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}" + (" + فوق EMA50 وEMA200" if trend_filter else "") + "\n"
                     f"({len(group)} عملة)\n\n", [line(x) for x in group])
         bgroup = sorted([x for x in breaks if x["tf"] == tf],
                         key=lambda x: (x["ago"], -vol_of.get(x["sym"], 0)))
@@ -243,7 +249,8 @@ def main() -> int:
                            "  أقل Stoch RSI: " + "، ".join(f'{x["sym"][:-4]} {x["k"]:.0f}' for x in low))
         send(token, chat,
              "✅ البوت يعمل على جميع عملات بينانس\n"
-             f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
+             f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}"
+             + (" + فوق EMA50 وEMA200" if trend_filter else "") + "\n"
              f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary))
 
     print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}، اختراقات: {len(breaks)}")
