@@ -118,33 +118,20 @@ def run_coin(job):
 
         for i in range(200, n - 1):
             nxt = df["open"].iat[i + 1]
-            # فلتر 1: العملة فوق EMA200 والبيتكوين فوق EMA200 (نفس الفريم)
-            f1 = close[i] > e200[i] and btc.get(opens[i], False)
-            # فلتر 2: فلتر 1 + EMA50 فوق EMA200 (ترند صاعد واضح)
-            f2 = f1 and e50[i] > e200[i]
+            # فلتر 3 (فلتر البوت الحالي): السعر فوق EMA50 وفوق EMA200 على نفس الفريم
+            f3 = close[i] > e50[i] and close[i] > e200[i]
             if kk[i - 1] < LEVEL <= kk[i] and hh[i] > 0 and rr[i] < RSI_MAX:
-                rules = [("C0", True), ("C1", f1), ("C2", f2), ("B1", f1), ("B2", f2)]
-                for rule, ok in rules:
-                    if not ok:
-                        continue
-                    if rule.startswith("C"):
-                        add(rule, i, nxt + 1.5 * a[i], nxt - a[i])
-                    else:
-                        add(rule, i, nxt * 1.02, nxt * 0.99)
-            if tf in ("1h", "4h") and vol_avg[i] > 0 and vol[i] >= 1.5 * vol_avg[i]:
-                window = df.iloc[max(0, i - 149):i + 1].reset_index(drop=True)
-                bo = breakout_at(window, len(window) - 1)
-                if bo:
-                    add("TOP0", i, bo["top"], bo["stop"], 100)
-                    if f1:
-                        add("TOP1", i, bo["top"], bo["stop"], 100)
-                        add("T1_1", i, bo["target"], bo["stop"], 100)
-                    if f2:
-                        add("TOP2", i, bo["top"], bo["stop"], 100)
+                add("A0", i, nxt * 1.01, nxt * 0.99)
+                add("C0", i, nxt + 1.5 * a[i], nxt - a[i])
+                if f3:
+                    add("A3", i, nxt * 1.01, nxt * 0.99)
+                    add("B3", i, nxt * 1.02, nxt * 0.99)
+                    add("C3", i, nxt + 1.5 * a[i], nxt - a[i])
             if rng.random() < 0.02:
                 add("RND0", i, nxt + 1.5 * a[i], nxt - a[i])
-                if f1:
-                    add("RND1", i, nxt + 1.5 * a[i], nxt - a[i])
+                if f3:
+                    add("RND3", i, nxt + 1.5 * a[i], nxt - a[i])
+                    add("RNDA3", i, nxt * 1.01, nxt * 0.99)
     except Exception as e:
         print(f"{sym} {tf}: {e}", file=sys.stderr)
     return out
@@ -166,17 +153,14 @@ def stats(trades: list[dict]) -> dict:
 
 
 NAMES = {
+    "A0": "Stoch RSI (هدف 1% / وقف 1%) — بدون فلتر",
+    "A3": "Stoch RSI (هدف 1% / وقف 1%) — فوق EMA50 وEMA200",
+    "B3": "Stoch RSI (هدف 2% / وقف 1%) — فوق EMA50 وEMA200",
     "C0": "Stoch RSI (ATR) — بدون فلتر",
-    "C1": "Stoch RSI (ATR) — فلتر 1",
-    "C2": "Stoch RSI (ATR) — فلتر 2",
-    "B1": "Stoch RSI (هدف 2% / وقف 1%) — فلتر 1",
-    "B2": "Stoch RSI (هدف 2% / وقف 1%) — فلتر 2",
-    "TOP0": "اختراق ترند (هدف القمة) — بدون فلتر",
-    "TOP1": "اختراق ترند (هدف القمة) — فلتر 1",
-    "TOP2": "اختراق ترند (هدف القمة) — فلتر 2",
-    "T1_1": "اختراق ترند (أقرب مقاومة) — فلتر 1",
+    "C3": "Stoch RSI (ATR) — فوق EMA50 وEMA200",
+    "RNDA3": "عشوائي (هدف 1% / وقف 1%) — فوق EMA50 وEMA200",
     "RND0": "عشوائي (ATR) — بدون فلتر",
-    "RND1": "عشوائي (ATR) — فلتر 1",
+    "RND3": "عشوائي (ATR) — فوق EMA50 وEMA200",
 }
 
 
@@ -187,7 +171,7 @@ def main() -> int:
         b = klines("BTCUSDT", tf, HISTORY[tf] + 400)
         up = b["close"] > ema(b["close"], 200)
         BTC_UP[tf] = dict(zip(b["open_time"].to_numpy(), up.to_numpy()))
-    print("فلتر 1: العملة فوق EMA200 والبيتكوين فوق EMA200 | فلتر 2: فلتر 1 + EMA50 فوق EMA200")
+    print("الفلتر: إغلاق الشمعة فوق EMA50 وفوق EMA200 على نفس الفريم (نفس شرط البوت)")
     jobs = [(s, tf) for tf in HISTORY for s in pairs]
     with ThreadPoolExecutor(max_workers=6) as pool:
         trades = [t for res in pool.map(run_coin, jobs) for t in res]
