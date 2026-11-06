@@ -2,7 +2,7 @@ name: Stoch RSI Telegram Bot
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       test:
@@ -10,16 +10,28 @@ on:
         type: boolean
         default: true
 
+concurrency:
+  group: stoch-bot
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: signal-bot/requirements.txt
       - run: pip install -q -r signal-bot/requirements.txt
+      # يحفظ الإشارات اللي انرسلت حتى ما تتكرر بين التشغيلات
+      - uses: actions/cache/restore@v4
+        with:
+          path: signal-bot/state.json
+          key: stoch-state-${{ github.run_id }}
+          restore-keys: stoch-state-
       - name: Scan and alert
         working-directory: signal-bot
         env:
@@ -28,6 +40,12 @@ jobs:
           SYMBOLS: ${{ vars.SYMBOLS }}
           INTERVAL: ${{ vars.INTERVAL }}
           LEVEL: ${{ vars.LEVEL }}
-          WINDOW_MIN: "15"
+          RSI_MAX: ${{ vars.RSI_MAX }}
+          MIN_VOLUME: ${{ vars.MIN_VOLUME }}
           TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test && '1' || '0' }}
         run: python stoch_bot.py
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: signal-bot/state.json
+          key: stoch-state-${{ github.run_id }}
