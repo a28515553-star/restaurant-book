@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مقارن أسعار الطيران</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f2742">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="أسعار الطيران">
+<style>
+:root{--bg:#f3f6fa;--panel:#fff;--line:#dde3eb;--tx:#13202e;--mut:#5f6f82;--acc:#1767d1;--acc2:#0f2742;--ok:#0a8a4a;--warn:#b54708}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1420;--panel:#132131;--line:#24384f;--tx:#e8eef5;--mut:#93a4b8;--acc:#4b9bff;--acc2:#071019;--ok:#35c27a;--warn:#f5a25d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif}
+header{background:var(--acc2);color:#fff;padding:14px 16px}
+header h1{margin:0;font-size:19px}
+header p{margin:2px 0 0;font-size:13px;opacity:.8}
+main{max-width:760px;margin:0 auto;padding:12px 16px 40px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+input,select,button{font:inherit;color:var(--tx)}
+input,select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:44px}
+button{cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--panel);padding:8px 12px;min-height:40px}
+.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700;width:100%;min-height:48px;font-size:16px}
+.row{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+.places{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+.swap{min-height:44px;width:44px;padding:0;font-size:18px}
+.field{position:relative;margin-bottom:10px}
+.sugg{position:absolute;top:100%;inset-inline:0;z-index:10;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-top:2px;max-height:260px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.15)}
+.sugg div{padding:9px 10px;cursor:pointer;border-bottom:1px solid var(--line)}
+.sugg div:last-child{border:0}
+.sugg div:hover,.sugg div.on{background:var(--bg)}
+.sugg b{font-family:ui-monospace,monospace;margin-inline-start:6px;color:var(--acc)}
+.sugg small{color:var(--mut)}
+.picked{font-size:12px;color:var(--mut);min-height:18px}
+.seg{display:flex;gap:6px;margin-bottom:10px}
+.seg button{flex:1}
+.seg button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.pax{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.step{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:8px;padding:4px;background:var(--bg)}
+.step button{width:34px;min-height:34px;padding:0}
+.step span{font-weight:700}
+.err{color:var(--warn);font-size:13px;margin:6px 0}
+.sum{font-weight:700;margin-bottom:4px}
+.mut{color:var(--mut);font-size:13px}
+.site{display:grid;grid-template-columns:1fr 110px auto;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.site:last-child{border:0}
+.site .n{font-weight:700}
+.site .d{font-size:12px;color:var(--mut)}
+.site input{min-height:38px;padding:6px 8px;text-align:center}
+.site a{display:inline-block;text-decoration:none;background:var(--acc);color:#fff;border-radius:8px;padding:8px 14px;font-weight:700;white-space:nowrap}
+.site.best{background:color-mix(in srgb,var(--ok) 10%,transparent);border-radius:8px;padding-inline:8px}
+.site.best .n::after{content:" ✓ الأرخص";color:var(--ok);font-size:12px}
+.tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.tools a,.tools button{flex:1 1 160px;text-align:center;text-decoration:none;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:9px;background:var(--bg)}
+.recent button{display:block;width:100%;text-align:start;margin-bottom:6px;background:var(--bg)}
+.tips li{margin-bottom:4px}
+@media(max-width:520px){.row{grid-template-columns:1fr}.site{grid-template-columns:1fr 90px}.site a{grid-column:1/-1;text-align:center}}
+</style>
+</head>
+<body>
+<header>
+  <h1>✈️ مقارن أسعار الطيران</h1>
+  <p>ابحث مرة واحدة وافتح نفس الرحلة في كل مواقع الحجز</p>
+</header>
+<main>
+  <form class="card" id="form" autocomplete="off">
+    <div class="seg" id="trip">
+      <button type="button" data-v="rt" class="on">ذهاب وعودة</button>
+      <button type="button" data-v="ow">ذهاب فقط</button>
+    </div>
+    <div class="places">
+      <div class="field">
+        <label for="from">من</label>
+        <input id="from" placeholder="مدينة أو رمز المطار" enterkeyhint="next">
+        <div class="picked" id="fromPicked"></div>
+      </div>
+      <button type="button" class="swap" id="swap" title="تبديل" aria-label="تبديل">⇄</button>
+      <div class="field">
+        <label for="to">إلى</label>
+        <input id="to" placeholder="مدينة أو رمز المطار" enterkeyhint="next">
+        <div class="picked" id="toPicked"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="depart">تاريخ الذهاب</label><input type="date" id="depart"></div>
+      <div class="field" id="retBox"><label for="ret">تاريخ العودة</label><input type="date" id="ret"></div>
+    </div>
+    <div class="pax">
+      <div><label>بالغين</label><div class="step" data-k="adults"><button type="button">−</button><span>1</span><button type="button">+</button></div></div>
+      <div><label>أطفال (2-11)</label><div class="step" data-k="children"><button type="button">−</button><span>0</span><button type="button">+</button></div></div>
+      <div><label>رضّع (&lt;2)</label><div class="step" data-k="infants"><button type="button">−</button><span>0</span><button type="button">+</button></div></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="cabin">الدرجة</label>
+        <select id="cabin"><option value="economy">سياحية</option><option value="premium">سياحية مميزة</option><option value="business">رجال الأعمال</option><option value="first">الأولى</option></select></div>
+      <div class="field"><label for="currency">العملة</label>
+        <select id="currency"><option>SAR</option><option>AED</option><option>KWD</option><option>QAR</option><option>BHD</option><option>OMR</option><option>EGP</option><option>JOD</option><option>USD</option><option>EUR</option><option>GBP</option><option>TRY</option></select></div>
+    </div>
+    <div class="err" id="err"></div>
+    <button class="pri" type="submit">ابحث في كل المواقع</button>
+  </form>
+
+  <section class="card" id="results" hidden>
+    <div class="sum" id="sum"></div>
+    <p class="mut">اضغط «افتح» لكل موقع، ثم اكتب السعر اللي ظهر لك في الخانة — التطبيق يحدد لك الأرخص تلقائياً ويحفظ الأسعار لهذا البحث.</p>
+    <div id="sites"></div>
+    <div class="tools">
+      <button type="button" id="openAll">افتح كل المواقع مرة وحدة</button>
+      <a id="month" target="_blank" rel="noopener">📅 أرخص يوم في الشهر (Skyscanner)</a>
+      <button type="button" id="clearPrices">مسح الأسعار</button>
+    </div>
+  </section>
+
+  <section class="card recent" id="recentBox" hidden>
+    <div class="sum">عمليات البحث الأخيرة</div>
+    <div id="recent"></div>
+  </section>
+
+  <section class="card tips">
+    <div class="sum">نصائح للحصول على أرخص سعر</div>
+    <ul class="mut">
+      <li>جرّب «أرخص يوم في الشهر» — فرق يوم أو يومين ممكن يوفّر كثير.</li>
+      <li>قارن السعر النهائي بعد الضرائب والعفش، مو السعر المبدئي.</li>
+      <li>بعد ما تلقى أرخص رحلة، افتح موقع شركة الطيران نفسها — أحياناً يكون أرخص أو بشروط أفضل.</li>
+      <li>إذا ما فتحت كل المواقع مع زر «افتح الكل»، اسمح بالنوافذ المنبثقة للموقع أو افتحها واحد واحد.</li>
+    </ul>
+  </section>
+</main>
+<script src="airports.js"></script>
+<script src="links.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
