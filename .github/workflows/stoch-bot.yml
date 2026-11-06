@@ -42,6 +42,7 @@ jobs:
           LEVEL: ${{ vars.LEVEL }}
           RSI_MAX: ${{ vars.RSI_MAX }}
           MIN_VOLUME: ${{ vars.MIN_VOLUME }}
+          BREAKOUT_TF: ${{ vars.BREAKOUT_TF }}
           TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test && '1' || '0' }}
         run: python stoch_bot.py
       - uses: actions/cache/save@v4
