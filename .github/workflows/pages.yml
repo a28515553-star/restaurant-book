@@ -1,9 +1,9 @@
-name: Deploy crypto-scanner to GitHub Pages
+name: Deploy web apps to GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: ['crypto-scanner/**', '.github/workflows/pages.yml']
+    paths: ['crypto-scanner/**', 'flight-search/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -26,8 +26,17 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Test analysis engine
         run: node crypto-scanner/test.js
+      - name: Test flight links
+        run: node flight-search/test.js
+      # ماسح بينانس على الجذر (نفس الرابط القديم)، ومقارن الطيران على /flights/
+      - name: Assemble site
+        run: |
+          mkdir -p _site/flights
+          cp -r crypto-scanner/. _site/
+          cp -r flight-search/. _site/flights/
+          rm -f _site/test.js _site/flights/test.js
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: crypto-scanner
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
