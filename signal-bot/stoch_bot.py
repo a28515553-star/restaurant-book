@@ -42,7 +42,7 @@ import requests
 
 from bot import BASE_URLS, ema, fetch_klines, load_env, rsi
 from trend import breakout_at
-from zones import zone_hit
+from zones import _atr as zone_atr, zone_hit
 
 TF_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
 
@@ -175,7 +175,8 @@ def main() -> int:
                 if test or ago <= zwin:
                     for z in zone_hit(df, i):
                         z.update({"sym": sym, "tf": interval, "t": t, "ago": ago,
-                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
+                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1],
+                                  "atr": float(zone_atr(df)[i])})
                         zhits.append(z)
                 if interval not in intervals or (not test and ago > window):
                     if test:
@@ -252,7 +253,18 @@ def main() -> int:
             head = f'🟥 {x["sym"][:-4]} وصل مقاومة قوية {zone} ({x["touches"]} لمسات'
             head += "، كان دعم وصار مقاومة)" if x["flip"] else ")"
             status = "⛔ انرفض وأغلق تحت المقاومة" if x["held"] else "🚀 اخترق المقاومة وأغلق فوقها"
-        return f'{head}\n    {status} | {price} | {when}'
+        out = f'{head}\n    {status} | {price} | {when}'
+        if x["kind"] == "resistance" and not x["held"]:
+            # نفس قواعد الاختبار التاريخي: الوقف تحت المنطقة بـ0.5×ATR والهدف ضعف المخاطرة
+            entry = x["price"]
+            stop = x["lo"] - 0.5 * x["atr"]
+            if 0 < entry - stop < 0.2 * entry:
+                target = entry + 2 * (entry - stop)
+                out += (f'\n    🎯 الهدف {fmt_price(target)} (+{(target / entry - 1) * 100:.1f}%)'
+                        f' | 🛑 الوقف {fmt_price(stop)} (-{(1 - stop / entry) * 100:.1f}%)')
+                if x["tf"] in ("4h", "1d"):
+                    out += "\n    ⭐ أفضل إشارة في الاختبار التاريخي (اختراق على 4 ساعات أو يومي)"
+        return out
 
     for tf in all_tfs:
         zgroup = sorted([x for x in zhits if x["tf"] == tf],
