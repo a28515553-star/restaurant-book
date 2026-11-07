@@ -33,23 +33,35 @@ def _atr(df: pd.DataFrame, n: int = 14) -> np.ndarray:
     return pd.Series(tr).ewm(alpha=1 / n, adjust=False).mean().to_numpy()
 
 
-def find_zones(df: pd.DataFrame, end: int) -> list[dict]:
-    """مناطق قوية من الشموع اللي قبل end فقط (بدون نظر للمستقبل)."""
-    h = df["high"].to_numpy(float)[:end]
-    l = df["low"].to_numpy(float)[:end]
+def all_pivots(df: pd.DataFrame) -> list[tuple]:
+    """كل القمم والقيعان (السعر، رقم الشمعة، قمة أو قاع). القمة j تتأكد بعد PIVOT شمعة."""
+    h = df["high"].to_numpy(float)
+    l = df["low"].to_numpy(float)
+    piv = []
+    for j in range(PIVOT, len(df) - PIVOT):
+        if h[j] == h[j - PIVOT:j + PIVOT + 1].max():
+            piv.append((h[j], j, "H"))
+        if l[j] == l[j - PIVOT:j + PIVOT + 1].min():
+            piv.append((l[j], j, "L"))
+    return piv
+
+
+def find_zones(df: pd.DataFrame, end: int, piv: list | None = None, atr: np.ndarray | None = None,
+               lookback: int | None = None) -> list[dict]:
+    """مناطق قوية من الشموع اللي قبل end فقط (بدون نظر للمستقبل).
+    piv و atr و lookback اختيارية لتسريع الاختبار التاريخي (نفس النتيجة)."""
     c = df["close"].to_numpy(float)[:end]
     if end < 4 * PIVOT + 20:
         return []
-    piv = []  # (السعر، رقم الشمعة، قمة أو قاع)
-    for j in range(PIVOT, end - PIVOT):
-        win_h, win_l = h[j - PIVOT:j + PIVOT + 1], l[j - PIVOT:j + PIVOT + 1]
-        if h[j] == win_h.max():
-            piv.append((h[j], j, "H"))
-        if l[j] == win_l.min():
-            piv.append((l[j], j, "L"))
+    start = 0 if lookback is None else max(0, end - lookback)
+    if piv is None:
+        piv = all_pivots(df.iloc[:end])
+    piv = [x for x in piv if start + PIVOT <= x[1] <= end - 1 - PIVOT]
     if not piv:
         return []
-    tol = max(ATR_TOL * _atr(df)[end - 1], 0.003 * c[-1])
+    if atr is None:
+        atr = _atr(df)
+    tol = max(ATR_TOL * atr[end - 1], 0.003 * c[-1])
     clusters, cur = [], []
     for p in sorted(piv):
         if cur and p[0] - np.mean([x[0] for x in cur]) > tol:
@@ -82,14 +94,17 @@ def _strong(z: dict, kind: str) -> bool:
     return (kind == "support" and z["types"] == {"H"}) or (kind == "resistance" and z["types"] == {"L"})
 
 
-def zone_hit(df: pd.DataFrame, i: int) -> list[dict]:
-    """هل الشمعة i وصلت منطقة دعم أو مقاومة قوية لأول مرة؟"""
+def zone_hit(df: pd.DataFrame, i: int, piv: list | None = None, atr: np.ndarray | None = None,
+             lookback: int | None = None) -> list[dict]:
+    """هل الشمعة i وصلت منطقة دعم أو مقاومة قوية بعد ما ابتعد السعر عنها؟"""
     if i < APPROACH:
         return []
-    zones = find_zones(df, i)
+    if atr is None:
+        atr = _atr(df)
+    zones = find_zones(df, i, piv, atr, lookback)
     h, l, c = (df[x].to_numpy(float) for x in ("high", "low", "close"))
     before = c[i - APPROACH:i]
-    away = AWAY_ATR * _atr(df)[i - 1]
+    away = AWAY_ATR * atr[i - 1]
     recent = c[max(0, i - AWAY_BARS):i]
     best = {}
     for z in zones:

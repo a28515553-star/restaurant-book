@@ -27,7 +27,7 @@
     WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
     BREAKOUT_TF  فريمات تنبيه اختراق الترند (الافتراضي 1h,4h)، واكتب none لإيقافه
-    ZONE_TF      فريمات تنبيه الوصول لدعم أو مقاومة قوية (الافتراضي 1d، وتقدر تكتب 1d,4h)، واكتب none لإيقافه
+    ZONE_TF      فريمات تنبيه الوصول لدعم أو مقاومة قوية (الافتراضي 1d,4h,1h)، واكتب none لإيقافه
     TEST=1       يرسل رسالة تجربة
 """
 from __future__ import annotations
@@ -141,7 +141,7 @@ def main() -> int:
     test = os.getenv("TEST") == "1"
     sym_env = (os.getenv("SYMBOLS") or "ALL").strip().upper()
     breakout_tfs = {i.strip() for i in (os.getenv("BREAKOUT_TF") or "1h,4h").split(",")}
-    zone_tfs = [i.strip() for i in (os.getenv("ZONE_TF") or "1d").split(",") if i.strip() in TF_MINUTES]
+    zone_tfs = [i.strip() for i in (os.getenv("ZONE_TF") or "1d,4h,1h").split(",") if i.strip() in TF_MINUTES]
     all_tfs = intervals + [tf for tf in zone_tfs if tf not in intervals]
 
     if sym_env in ("", "ALL"):
