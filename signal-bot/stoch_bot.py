@@ -27,6 +27,8 @@
     WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
     BREAKOUT_TF  فريمات تنبيه اختراق الترند (الافتراضي 1h,4h)، واكتب none لإيقافه
+    R2_ENABLE    1 (الافتراضي): استراتيجية RSI(2) اليومية مع تنبيه شراء وبيع، و0 لإيقافها
+    R2_MIN_VOLUME أقل سيولة يومية لعملات RSI(2) (5000000، نفس الاختبار التاريخي)
     ZONE_TF      فريمات تنبيه الوصول لدعم أو مقاومة قوية (الافتراضي 1d,4h,1h)، واكتب none لإيقافه
     TEST=1       يرسل رسالة تجربة
 """
@@ -43,6 +45,7 @@ import requests
 from bot import BASE_URLS, ema, fetch_klines, load_env, rsi
 from trend import breakout_at
 from zones import _atr as zone_atr, zone_hit
+from rsi2 import MAX_DAYS as R2_DAYS, SELL_RSI as R2_SELL, BUY_RSI as R2_BUY, check_exit, daily_state
 
 TF_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
 
@@ -70,7 +73,9 @@ def load_state(path: str) -> dict:
 
 
 def save_state(path: str, state: dict, now_ms: float) -> None:
-    keep = {key: t for key, t in state.items() if now_ms - t < 2 * 86_400_000}
+    # المفاتيح اللي تبدأ بـ _ (مثل الصفقات المفتوحة) تنحفظ كما هي، والباقي ينحذف بعد يومين
+    keep = {key: t for key, t in state.items()
+            if key.startswith("_") or now_ms - t < 2 * 86_400_000}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(keep, f)
 
@@ -143,6 +148,11 @@ def main() -> int:
     breakout_tfs = {i.strip() for i in (os.getenv("BREAKOUT_TF") or "1h,4h").split(",")}
     zone_tfs = [i.strip() for i in (os.getenv("ZONE_TF") or "1d,4h,1h").split(",") if i.strip() in TF_MINUTES]
     all_tfs = intervals + [tf for tf in zone_tfs if tf not in intervals]
+    r2_on = (os.getenv("R2_ENABLE") or "1").strip() != "0"
+    r2_min_vol = float(os.getenv("R2_MIN_VOLUME") or 5_000_000)
+    positions = sent.get("_positions", {})
+    if r2_on and "1d" not in all_tfs:
+        all_tfs.append("1d")
 
     if sym_env in ("", "ALL"):
         pairs = usdt_pairs(min_volume)
@@ -195,8 +205,13 @@ def main() -> int:
                     breaks.append(bo)
                 if test:
                     break
+            r2 = r2_exit = None
+            if r2_on and interval == "1d":
+                r2 = daily_state(df)
+                if sym in positions:
+                    r2_exit = check_exit(df, positions[sym])
             return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits, "breaks": breaks,
-                    "zones": zhits}
+                    "zones": zhits, "r2": r2, "r2_exit": r2_exit}
         except Exception as e:
             print(f"{sym} {interval}: {e}", file=sys.stderr)
             return None
@@ -204,6 +219,17 @@ def main() -> int:
     jobs = [(sym, tf) for tf in all_tfs for sym, _ in pairs]
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = [r for r in pool.map(check, jobs) if r]
+
+    # صفقات RSI(2) مفتوحة لعملات ما انفحصت هالمرة (مثلاً نزلت سيولتها): نجيب بياناتها لحالها
+    if r2_on:
+        scanned = {x["sym"] for x in results if x["tf"] == "1d"}
+        for sym in [s for s in positions if s not in scanned]:
+            try:
+                d = fetch_klines(sym, "1d", 300)
+                results.append({"sym": sym, "tf": "1d", "k": 50.0, "hits": [], "breaks": [], "zones": [],
+                                "r2": None, "r2_exit": check_exit(d, positions[sym])})
+            except Exception as e:
+                print(f"{sym} 1d: {e}", file=sys.stderr)
 
     def key(x):
         return f'{x["sym"]}:{x["tf"]}:{x["t"]}'
@@ -291,6 +317,40 @@ def main() -> int:
                         f"📐 اختراق ترند نازل | فريم {tf}\n"
                         f"السعر كسر خط الترند النازل للأعلى مع فوليوم عالي\n"
                         f"({len(bgroup)} عملة)\n\n", [bline(x) for x in bgroup])
+    # استراتيجية RSI(2) اليومية: البيع أول، بعدها الشراء
+    r2_sells = [x for x in results if x.get("r2_exit")]
+    r2_buys = [x for x in results
+               if x.get("r2") and x["r2"]["buy"] and x["sym"] not in positions
+               and (not vol_of.get(x["sym"]) or vol_of[x["sym"]] >= r2_min_vol)
+               and (test or f'R2:{x["sym"]}:{x["r2"]["t"]}' not in sent)]
+    if r2_sells:
+        lines = []
+        for x in r2_sells:
+            e = x["r2_exit"]
+            mark = "🟢" if e["pnl"] > 0 else "🔴"
+            lines.append(f'{mark} بيع {x["sym"][:-4]}  السعر {fmt_price(e["price"])} | '
+                         f'{e["pnl"]:+.1f}% بعد {e["days"]} يوم\n    السبب: {e["reason"]}')
+        send_chunks(token, chat, "🏆 RSI(2) اليومية: وقت البيع 🔔\n"
+                    "بيع على سعر السوق الحين\n\n", lines)
+        if not test:
+            for x in r2_sells:
+                positions.pop(x["sym"], None)
+    if r2_buys:
+        r2_buys.sort(key=lambda x: x["r2"]["rsi2"])
+        lines = [f'🟢 {x["sym"][:-4]}  السعر {fmt_price(x["r2"]["close"])} | RSI(2) = {x["r2"]["rsi2"]:.1f}'
+                 f' | فوق SMA200 بـ{(x["r2"]["close"] / x["r2"]["sma200"] - 1) * 100:.0f}%'
+                 for x in r2_buys]
+        send_chunks(token, chat,
+                    "🏆 RSI(2) اليومية: فرص شراء\n"
+                    f"الترند صاعد (فوق SMA200) و RSI(2) أقل من {R2_BUY:g}\n"
+                    f"🔔 البيع: البوت بيرسل لك لما RSI(2) يطلع فوق {R2_SELL:g} أو بعد {R2_DAYS} أيام\n"
+                    "💰 كل صفقة 10% من رأس المال، وأقصى 10 صفقات مفتوحة\n\n", lines)
+        if not test:
+            for x in r2_buys:
+                positions[x["sym"]] = {"entry": x["r2"]["close"], "t": x["r2"]["t"]}
+                sent[f'R2:{x["sym"]}:{x["r2"]["t"]}'] = now_ms
+    sent["_positions"] = positions
+
     if not test:
         for x in signals:
             sent[key(x)] = now_ms
@@ -314,10 +374,13 @@ def main() -> int:
              "✅ البوت يعمل على جميع عملات بينانس\n"
              f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}"
              + (" + فوق EMA50 وEMA200" if trend_filter else "") + "\n"
-             f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary))
+             f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary)
+             + (f"\n\n🏆 RSI(2) اليومية: فرص شراء اليوم {len(r2_buys)}، صفقات مفتوحة {len(positions)}"
+                + ("".join(f"\n  • {sym[:-4]} دخول {fmt_price(p['entry'])}" for sym, p in positions.items()))
+                if r2_on else ""))
 
     print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}، اختراقات: {len(breaks)}، "
-          f"دعم ومقاومة: {len(zhits)}")
+          f"دعم ومقاومة: {len(zhits)}، RSI(2) شراء: {len(r2_buys)} بيع: {len(r2_sells)}")
     return 0 if results else 1
 
 
