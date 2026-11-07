@@ -5,9 +5,13 @@
   - خط K في Stoch RSI ينزل تحت مستوى التشبع (20) ثم يبدأ يخترقه للأعلى
   - الماكدي إيجابي (خط الماكدي فوق خط الإشارة، الهيستوجرام موجب)
   - RSI مو في منطقة تشبع شراء (أقل من 70)
+  - السعر فوق EMA50 وفوق EMA200 (ترند صاعد)
 
 ويرسل كمان تنبيه "اختراق ترند نازل" لما السعر يكسر خط الترند النازل للأعلى
 مع فوليوم عالي، ومعه الدعم (للوقف) وأقرب مقاومة (للهدف). التفاصيل في trend.py.
+
+وتنبيه "دعم أو مقاومة قوية" لما السعر يرجع لمنطقة لمسها 4 مرات منفصلة أو أكثر،
+ويقول إذا ارتد منها أو كسرها. التفاصيل في zones.py.
 
 مصمم يشتغل على GitHub Actions كل 5 دقائق بدون سيرفر، ويحفظ الإشارات المرسلة
 حتى ما تتكرر. ما ينفذ أي صفقة.
@@ -19,9 +23,13 @@
     LEVEL        مستوى التشبع (20)
     MIN_VOLUME   أقل سيولة يومية بالدولار للعملة (1000000) لاستبعاد العملات الميتة
     RSI_MAX      أعلى RSI مسموح (70)
+    TREND_FILTER 1 (الافتراضي): الشراء بس إذا السعر فوق EMA50 وفوق EMA200، و0 لإيقافه
     WINDOW_MIN   يفحص الشموع اللي أغلقت خلال هالدقائق (90) حتى ما تضيع إشارة لو تأخر التشغيل
     STATE_FILE   ملف حفظ الإشارات المرسلة (state.json)
     BREAKOUT_TF  فريمات تنبيه اختراق الترند (الافتراضي 1h,4h)، واكتب none لإيقافه
+    R2_ENABLE    1 (الافتراضي): استراتيجية RSI(2) اليومية مع تنبيه شراء وبيع، و0 لإيقافها
+    R2_MIN_VOLUME أقل سيولة يومية لعملات RSI(2) (5000000، نفس الاختبار التاريخي)
+    ZONE_TF      فريمات تنبيه الوصول لدعم أو مقاومة قوية (الافتراضي 1d,4h,1h)، واكتب none لإيقافه
     TEST=1       يرسل رسالة تجربة
 """
 from __future__ import annotations
@@ -36,6 +44,10 @@ import requests
 
 from bot import BASE_URLS, ema, fetch_klines, load_env, rsi
 from trend import breakout_at
+from zones import _atr as zone_atr, zone_hit
+from rsi2 import MAX_DAYS as R2_DAYS, SELL_RSI as R2_SELL, BUY_RSI as R2_BUY, check_exit, daily_state
+
+TF_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "1d": 1440}
 
 STABLES = {"USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "PAX", "EUR", "AEUR", "EURI",
            "USDE", "XUSD", "USD1", "BFUSD", "PYUSD", "UST", "USTC", "SUSD", "GBP", "TRY", "BRL"}
@@ -61,7 +73,9 @@ def load_state(path: str) -> dict:
 
 
 def save_state(path: str, state: dict, now_ms: float) -> None:
-    keep = {key: t for key, t in state.items() if now_ms - t < 2 * 86_400_000}
+    # المفاتيح اللي تبدأ بـ _ (مثل الصفقات المفتوحة) تنحفظ كما هي، والباقي ينحذف بعد يومين
+    keep = {key: t for key, t in state.items()
+            if key.startswith("_") or now_ms - t < 2 * 86_400_000}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(keep, f)
 
@@ -125,12 +139,20 @@ def main() -> int:
     level = float(os.getenv("LEVEL") or 20)
     min_volume = float(os.getenv("MIN_VOLUME") or 1_000_000)
     rsi_max = float(os.getenv("RSI_MAX") or 70)
+    trend_filter = (os.getenv("TREND_FILTER") or "1").strip() != "0"
     window = float(os.getenv("WINDOW_MIN") or 90)
     state_file = os.getenv("STATE_FILE") or "state.json"
     sent = load_state(state_file)
     test = os.getenv("TEST") == "1"
     sym_env = (os.getenv("SYMBOLS") or "ALL").strip().upper()
     breakout_tfs = {i.strip() for i in (os.getenv("BREAKOUT_TF") or "1h,4h").split(",")}
+    zone_tfs = [i.strip() for i in (os.getenv("ZONE_TF") or "1d,4h,1h").split(",") if i.strip() in TF_MINUTES]
+    all_tfs = intervals + [tf for tf in zone_tfs if tf not in intervals]
+    r2_on = (os.getenv("R2_ENABLE") or "1").strip() != "0"
+    r2_min_vol = float(os.getenv("R2_MIN_VOLUME") or 5_000_000)
+    positions = sent.get("_positions", {})
+    if r2_on and "1d" not in all_tfs:
+        all_tfs.append("1d")
 
     if sym_env in ("", "ALL"):
         pairs = usdt_pairs(min_volume)
@@ -146,18 +168,33 @@ def main() -> int:
     def check(job):
         sym, interval = job
         try:
-            df = fetch_klines(sym, interval, 150)
+            df = fetch_klines(sym, interval, 300)
             if len(df) < 60:
                 return None
             r, k, hist = indicators(df["close"])
+            e50, e200 = ema(df["close"], 50), ema(df["close"], 200)
             n = len(df)
-            hits, breaks = [], []
+            hits, breaks, zhits = [], [], []
+            # الدعم والمقاومة على الفريمات الكبيرة: نسمح بنافذة أطول (طول الشمعة) لأنها تغلق قليل
+            zwin = max(window, TF_MINUTES.get(interval, 0)) if interval in zone_tfs else -1
             for i in range(n - 1, n - 9, -1):
                 t = int(df["close_time"].iloc[i])
                 ago = (now_ms - t) / 60000
-                if not test and ago > window:
+                if not test and ago > max(window, zwin):
                     break
-                if k.iloc[i - 1] < level <= k.iloc[i] and hist.iloc[i] > 0 and r.iloc[i] < rsi_max:
+                if test or ago <= zwin:
+                    for z in zone_hit(df, i):
+                        z.update({"sym": sym, "tf": interval, "t": t, "ago": ago,
+                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1],
+                                  "atr": float(zone_atr(df)[i])})
+                        zhits.append(z)
+                if interval not in intervals or (not test and ago > window):
+                    if test:
+                        break
+                    continue
+                c = df["close"].iloc[i]
+                uptrend = not trend_filter or (len(df) >= 250 and c > e50.iloc[i] and c > e200.iloc[i])
+                if k.iloc[i - 1] < level <= k.iloc[i] and hist.iloc[i] > 0 and r.iloc[i] < rsi_max and uptrend:
                     hits.append({"sym": sym, "tf": interval, "t": t, "ago": ago,
                                  "k_prev": k.iloc[i - 1], "k": k.iloc[i], "rsi": r.iloc[i],
                                  "price_sig": df["close"].iloc[i], "price": df["close"].iloc[-1]})
@@ -168,14 +205,31 @@ def main() -> int:
                     breaks.append(bo)
                 if test:
                     break
-            return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits, "breaks": breaks}
+            r2 = r2_exit = None
+            if r2_on and interval == "1d":
+                r2 = daily_state(df)
+                if sym in positions:
+                    r2_exit = check_exit(df, positions[sym])
+            return {"sym": sym, "tf": interval, "k": k.iloc[-1], "hits": hits, "breaks": breaks,
+                    "zones": zhits, "r2": r2, "r2_exit": r2_exit}
         except Exception as e:
             print(f"{sym} {interval}: {e}", file=sys.stderr)
             return None
 
-    jobs = [(sym, tf) for tf in intervals for sym, _ in pairs]
+    jobs = [(sym, tf) for tf in all_tfs for sym, _ in pairs]
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = [r for r in pool.map(check, jobs) if r]
+
+    # صفقات RSI(2) مفتوحة لعملات ما انفحصت هالمرة (مثلاً نزلت سيولتها): نجيب بياناتها لحالها
+    if r2_on:
+        scanned = {x["sym"] for x in results if x["tf"] == "1d"}
+        for sym in [s for s in positions if s not in scanned]:
+            try:
+                d = fetch_klines(sym, "1d", 300)
+                results.append({"sym": sym, "tf": "1d", "k": 50.0, "hits": [], "breaks": [], "zones": [],
+                                "r2": None, "r2_exit": check_exit(d, positions[sym])})
+            except Exception as e:
+                print(f"{sym} 1d: {e}", file=sys.stderr)
 
     def key(x):
         return f'{x["sym"]}:{x["tf"]}:{x["t"]}'
@@ -185,6 +239,11 @@ def main() -> int:
 
     signals = [h for x in results for h in x["hits"] if test or key(h) not in sent]
     breaks = [h for x in results for h in x["breaks"] if test or bkey(h) not in sent]
+
+    def zkey(x):
+        return f'SR:{x["kind"]}:' + key(x)
+
+    zhits = [h for x in results for h in x["zones"] if test or zkey(h) not in sent]
 
     def price_when(x):
         when = "الحين" if x["ago"] < 20 else f'قبل {x["ago"]:.0f} دقيقة'
@@ -209,14 +268,47 @@ def main() -> int:
                 f'    🛑 الوقف {fmt_price(x["stop"])} (-{x["stop_pct"]:.1f}%) تحت الدعم {fmt_price(x["support"])}'
                 f'\n    ⚖️ الربح لقمة الترند أكبر من الخسارة {rr:.1f} مرة')
 
-    for tf in intervals:
+    def zline(x):
+        price, when = price_when(x)
+        zone = f'{fmt_price(x["lo"])} - {fmt_price(x["hi"])}'
+        if x["kind"] == "support":
+            head = f'🟩 {x["sym"][:-4]} وصل دعم قوي {zone} ({x["touches"]} لمسات'
+            head += "، كان مقاومة وصار دعم)" if x["flip"] else ")"
+            status = "✅ ارتد وأغلق فوق الدعم" if x["held"] else "❌ كسر الدعم وأغلق تحته"
+        else:
+            head = f'🟥 {x["sym"][:-4]} وصل مقاومة قوية {zone} ({x["touches"]} لمسات'
+            head += "، كان دعم وصار مقاومة)" if x["flip"] else ")"
+            status = "⛔ انرفض وأغلق تحت المقاومة" if x["held"] else "🚀 اخترق المقاومة وأغلق فوقها"
+        out = f'{head}\n    {status} | {price} | {when}'
+        if x["kind"] == "resistance" and not x["held"]:
+            # نفس قواعد الاختبار التاريخي: الوقف تحت المنطقة بـ0.5×ATR والهدف ضعف المخاطرة
+            entry = x["price"]
+            stop = x["lo"] - 0.5 * x["atr"]
+            if 0 < entry - stop < 0.2 * entry:
+                target = entry + 2 * (entry - stop)
+                out += (f'\n    🎯 الهدف {fmt_price(target)} (+{(target / entry - 1) * 100:.1f}%)'
+                        f' | 🛑 الوقف {fmt_price(stop)} (-{(1 - stop / entry) * 100:.1f}%)')
+                if x["tf"] in ("4h", "1d"):
+                    out += "\n    ⭐ أفضل إشارة في الاختبار التاريخي (اختراق على 4 ساعات أو يومي)"
+        return out
+
+    for tf in all_tfs:
+        zgroup = sorted([x for x in zhits if x["tf"] == tf],
+                        key=lambda x: (x["kind"] != "support", x["ago"], -vol_of.get(x["sym"], 0)))
+        if zgroup:
+            send_chunks(token, chat,
+                        f"🧱 دعم ومقاومة قوية | فريم {tf}\n"
+                        f"السعر رجع لمنطقة لمسها 4 مرات أو أكثر\n"
+                        f"({len(zgroup)} عملة)\n\n", [zline(x) for x in zgroup])
+        if tf not in intervals:
+            continue
         group = sorted([x for x in signals if x["tf"] == tf],
                        key=lambda x: (x["ago"], -vol_of.get(x["sym"], 0)))
         if not group:
             continue
         send_chunks(token, chat,
                     f"🚀 فرص شراء | فريم {tf}\n"
-                    f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
+                    f"Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}" + (" + فوق EMA50 وEMA200" if trend_filter else "") + "\n"
                     f"({len(group)} عملة)\n\n", [line(x) for x in group])
         bgroup = sorted([x for x in breaks if x["tf"] == tf],
                         key=lambda x: (x["ago"], -vol_of.get(x["sym"], 0)))
@@ -225,28 +317,70 @@ def main() -> int:
                         f"📐 اختراق ترند نازل | فريم {tf}\n"
                         f"السعر كسر خط الترند النازل للأعلى مع فوليوم عالي\n"
                         f"({len(bgroup)} عملة)\n\n", [bline(x) for x in bgroup])
+    # استراتيجية RSI(2) اليومية: البيع أول، بعدها الشراء
+    r2_sells = [x for x in results if x.get("r2_exit")]
+    r2_buys = [x for x in results
+               if x.get("r2") and x["r2"]["buy"] and x["sym"] not in positions
+               and (not vol_of.get(x["sym"]) or vol_of[x["sym"]] >= r2_min_vol)
+               and (test or f'R2:{x["sym"]}:{x["r2"]["t"]}' not in sent)]
+    if r2_sells:
+        lines = []
+        for x in r2_sells:
+            e = x["r2_exit"]
+            mark = "🟢" if e["pnl"] > 0 else "🔴"
+            lines.append(f'{mark} بيع {x["sym"][:-4]}  السعر {fmt_price(e["price"])} | '
+                         f'{e["pnl"]:+.1f}% بعد {e["days"]} يوم\n    السبب: {e["reason"]}')
+        send_chunks(token, chat, "🏆 RSI(2) اليومية: وقت البيع 🔔\n"
+                    "بيع على سعر السوق الحين\n\n", lines)
+        if not test:
+            for x in r2_sells:
+                positions.pop(x["sym"], None)
+    if r2_buys:
+        r2_buys.sort(key=lambda x: x["r2"]["rsi2"])
+        lines = [f'🟢 {x["sym"][:-4]}  السعر {fmt_price(x["r2"]["close"])} | RSI(2) = {x["r2"]["rsi2"]:.1f}'
+                 f' | فوق SMA200 بـ{(x["r2"]["close"] / x["r2"]["sma200"] - 1) * 100:.0f}%'
+                 for x in r2_buys]
+        send_chunks(token, chat,
+                    "🏆 RSI(2) اليومية: فرص شراء\n"
+                    f"الترند صاعد (فوق SMA200) و RSI(2) أقل من {R2_BUY:g}\n"
+                    f"🔔 البيع: البوت بيرسل لك لما RSI(2) يطلع فوق {R2_SELL:g} أو بعد {R2_DAYS} أيام\n"
+                    "💰 كل صفقة 10% من رأس المال، وأقصى 10 صفقات مفتوحة\n\n", lines)
+        if not test:
+            for x in r2_buys:
+                positions[x["sym"]] = {"entry": x["r2"]["close"], "t": x["r2"]["t"]}
+                sent[f'R2:{x["sym"]}:{x["r2"]["t"]}'] = now_ms
+    sent["_positions"] = positions
+
     if not test:
         for x in signals:
             sent[key(x)] = now_ms
         for x in breaks:
             sent[bkey(x)] = now_ms
+        for x in zhits:
+            sent[zkey(x)] = now_ms
     save_state(state_file, sent, now_ms)
 
     if test:
         summary = []
-        for tf in intervals:
+        for tf in all_tfs:
             res = [x for x in results if x["tf"] == tf]
             low = sorted(res, key=lambda x: x["k"])[:5]
             summary.append(f"⏱ فريم {tf}: فحص {len(res)} عملة، إشارات Stoch RSI "
                            f'{sum(1 for x in signals if x["tf"] == tf)}، اختراق ترند '
-                           f'{sum(1 for x in breaks if x["tf"] == tf)}\n'
+                           f'{sum(1 for x in breaks if x["tf"] == tf)}، دعم ومقاومة '
+                           f'{sum(1 for x in zhits if x["tf"] == tf)}\n'
                            "  أقل Stoch RSI: " + "، ".join(f'{x["sym"][:-4]} {x["k"]:.0f}' for x in low))
         send(token, chat,
              "✅ البوت يعمل على جميع عملات بينانس\n"
-             f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}\n"
-             f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary))
+             f"الشروط: Stoch RSI يخترق {level:g} للأعلى + ماكدي إيجابي + RSI أقل من {rsi_max:g}"
+             + (" + فوق EMA50 وEMA200" if trend_filter else "") + "\n"
+             f"العملات: سيولة يومية فوق {min_volume:,.0f}$\n\n" + "\n\n".join(summary)
+             + (f"\n\n🏆 RSI(2) اليومية: فرص شراء اليوم {len(r2_buys)}، صفقات مفتوحة {len(positions)}"
+                + ("".join(f"\n  • {sym[:-4]} دخول {fmt_price(p['entry'])}" for sym, p in positions.items()))
+                if r2_on else ""))
 
-    print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}، اختراقات: {len(breaks)}")
+    print(f"فحص {len(results)} من {len(jobs)}، إشارات: {len(signals)}، اختراقات: {len(breaks)}، "
+          f"دعم ومقاومة: {len(zhits)}، RSI(2) شراء: {len(r2_buys)} بيع: {len(r2_sells)}")
     return 0 if results else 1
 
 
