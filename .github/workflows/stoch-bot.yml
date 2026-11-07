@@ -44,6 +44,7 @@ jobs:
           MIN_VOLUME: ${{ vars.MIN_VOLUME }}
           BREAKOUT_TF: ${{ vars.BREAKOUT_TF }}
           TREND_FILTER: ${{ vars.TREND_FILTER }}
+          ZONE_TF: ${{ vars.ZONE_TF }}
           TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test && '1' || '0' }}
         run: python stoch_bot.py
       - uses: actions/cache/save@v4
