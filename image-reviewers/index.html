@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لجنة تدقيق الصور</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#3b1f0e">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="مدققين الصور">
+<style>
+:root{--bg:#f7f3ee;--panel:#fff;--line:#e6ddd2;--tx:#23170e;--mut:#6f6255;--acc:#c2410c;--acc2:#3b1f0e;--good:#15803d;--mid:#b45309;--bad:#b91c1c;--cust:#1d4ed8;--rest:#7c2d12}
+@media (prefers-color-scheme:dark){:root{--bg:#15100c;--panel:#211913;--line:#3a2e24;--tx:#f3ece4;--mut:#b3a596;--acc:#fb8b4b;--acc2:#0d0907;--good:#4ade80;--mid:#fbbf24;--bad:#f87171;--cust:#7aa2ff;--rest:#fdba74}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.6 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif}
+header{background:var(--acc2);color:#fff;padding:14px 16px}
+header h1{margin:0;font-size:19px}
+header p{margin:2px 0 0;font-size:13px;opacity:.85}
+main{max-width:900px;margin:0 auto;padding:12px 16px 40px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.sum{font-weight:700;margin-bottom:8px}
+label.f{display:block;font-size:12px;color:var(--mut);margin:8px 0 4px}
+input,select,textarea,button{font:inherit;color:var(--tx)}
+input[type=text],input[type=password],select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:44px}
+textarea{min-height:70px;resize:vertical}
+button{cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--panel);padding:8px 12px;min-height:40px}
+.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700;width:100%;min-height:50px;font-size:16px;margin-top:10px}
+.pri:disabled{opacity:.6;cursor:wait}
+.row{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+.keyrow{display:flex;gap:6px}
+.keyrow input{flex:1}
+.mut{color:var(--mut);font-size:13px}
+.err{color:var(--bad);font-size:14px;margin:6px 0}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:14px;text-align:center;cursor:pointer;display:block;background:var(--bg)}
+#drop.over{border-color:var(--acc)}
+#drop input{display:none}
+#preview{max-width:100%;max-height:360px;border-radius:8px;display:block;margin:0 auto}
+.groups{display:grid;gap:12px;grid-template-columns:1fr 1fr}
+.gt{font-weight:700;margin:4px 0 6px;font-size:14px}
+.gt.c{color:var(--cust)} .gt.r{color:var(--rest)}
+.pick{display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer;background:var(--bg)}
+.pick input{margin-top:5px;width:18px;height:18px;flex:none}
+.pick b{display:block;font-size:14px}
+.pick small{display:block;color:var(--mut);font-size:12px;line-height:1.5}
+.pick .del{margin-inline-start:auto;min-height:28px;padding:0 8px;flex:none}
+.ic{font-size:22px;line-height:1;flex:none}
+details summary{cursor:pointer;font-weight:700}
+#addCustom{margin-top:8px}
+#addCustom .row{grid-template-columns:2fr 1fr}
+.top{display:grid;grid-template-columns:200px 1fr;gap:14px;align-items:start}
+#resultImg{width:100%;border-radius:8px}
+.rh{display:flex;gap:10px;align-items:center}
+.rh>div{flex:1;min-width:0}
+.rh b{display:block}
+.rh small{color:var(--mut);font-size:12px}
+.score{font-weight:800;font-size:24px;flex:none}
+.score small{font-size:12px;color:var(--mut);font-weight:400}
+.score.good,.final.good{color:var(--good)} .score.mid,.final.mid{color:var(--mid)} .score.bad,.final.bad{color:var(--bad)}
+.final{font-size:20px;font-weight:800;margin:8px 0 2px}
+.verdict{margin:8px 0;font-weight:600}
+.dec{font-size:13px;color:var(--mut);margin-top:6px}
+.d-y{color:var(--good)} .d-m{color:var(--mid)} .d-n{color:var(--bad)}
+.rgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.rcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.gh{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px}
+.gh h2{margin:0;font-size:17px}
+.gh span{font-weight:800}
+#grpCustomers h2{color:var(--cust)} #grpRestaurant h2{color:var(--rest)}
+.lst{font-size:13px;margin-top:6px}
+.lst ul{margin:2px 0 0;padding-inline-start:18px}
+.lst.probs b{color:var(--bad)} .lst.fixes b{color:var(--acc)} .lst.likes b{color:var(--good)}
+.lst.ol ul{list-style:decimal}
+.spin{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:s 1s linear infinite;flex:none}
+@keyframes s{to{transform:rotate(360deg)}}
+#copy{width:100%;margin-top:10px}
+@media (max-width:640px){.groups,.row,.top{grid-template-columns:1fr}.top img{max-height:240px;object-fit:contain}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧐 لجنة تدقيق الصور</h1>
+  <p>ارفع صورة الطبق أو المنيو أو الإعلان — مدققين بالذكاء الاصطناعي يشوفونها كأنهم عملاء وفريق المطعم، وكل واحد له مهمته.</p>
+</header>
+<main>
+  <section class="card">
+      <label id="drop" for="file">
+        <input type="file" id="file" accept="image/*">
+        <div id="dropHint"><div style="font-size:34px">📷</div><b>اضغط لاختيار صورة</b><div class="mut">أو اسحبها هنا أو الصقها (Ctrl+V)</div></div>
+        <img id="preview" alt="الصورة المختارة" hidden>
+      </label>
+      <div class="row">
+        <div><label class="f" for="type">نوع الصورة</label><select id="type"></select></div>
+        <div><label class="f" for="name">اسم المنتج أو المطعم (اختياري)</label><input type="text" id="name" placeholder="مثال: برجر الدبل تشيز"></div>
+      </div>
+      <div class="row">
+        <div><label class="f" for="price">السعر (اختياري)</label><input type="text" id="price" placeholder="مثال: 32 ريال"></div>
+        <div><label class="f" for="notes">ملاحظة للمدققين (اختياري)</label><input type="text" id="notes" placeholder="مثال: الصورة للشاشة اللي عند الكاشير"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="sum">المدققين — اختر مين يدقق</div>
+      <div class="groups">
+        <div><div class="gt c">👥 العملاء</div><div id="pickCustomers"></div></div>
+        <div><div class="gt r">🏪 فريق المطعم</div><div id="pickRestaurant"></div></div>
+      </div>
+      <details>
+        <summary>➕ أضف مدقق بمهمة خاصة</summary>
+        <form id="addCustom">
+          <div class="row">
+            <div><label class="f" for="cName">اسم المدقق</label><input type="text" id="cName" placeholder="مثال: عميل نباتي"></div>
+            <div><label class="f" for="cGroup">من</label><select id="cGroup"><option value="customer">العملاء</option><option value="restaurant">المطعم</option></select></div>
+          </div>
+          <label class="f" for="cJob">مهمته</label>
+          <textarea id="cJob" placeholder="مثال: يبحث عن خيارات نباتية؛ هل واضح إن الطبق بدون لحم؟ هل يغريه؟"></textarea>
+          <button type="submit">إضافة</button>
+        </form>
+      </details>
+    </section>
+
+    <form class="card" id="form">
+      <label class="f" for="key">مفتاح Anthropic API</label>
+      <div class="keyrow"><input type="password" id="key" placeholder="sk-ant-..." autocomplete="off"><button type="button" id="keyToggle" title="إظهار">👁</button></div>
+      <p class="mut">المفتاح يتحفظ في جوالك فقط ويُرسل مباشرة إلى Anthropic. تحصل عليه من console.anthropic.com. كل مدقق طلب مستقل، فالتكلفة تزيد مع عدد المدققين.</p>
+      <div class="err" id="err"></div>
+      <button class="pri" id="go" type="submit">ابدأ التدقيق</button>
+    </form>
+
+
+  <section id="results" hidden>
+    <div class="card top">
+      <img id="resultImg" alt="الصورة المدققة">
+      <div id="summary"></div>
+    </div>
+    <div id="grpCustomers"><div class="gh"><h2>👥 رأي العملاء</h2><span id="avgCustomers"></span></div><div class="rgrid" id="resCustomers"></div></div>
+    <div id="grpRestaurant"><div class="gh"><h2>🏪 رأي فريق المطعم</h2><span id="avgRestaurant"></span></div><div class="rgrid" id="resRestaurant"></div></div>
+    <button type="button" id="copy" hidden>نسخ التقرير</button>
+  </section>
+</main>
+<script src="reviewers.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

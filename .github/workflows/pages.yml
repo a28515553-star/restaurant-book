@@ -3,7 +3,7 @@ name: Deploy web apps to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['crypto-scanner/**', 'flight-search/**', '.github/workflows/pages.yml']
+    paths: ['crypto-scanner/**', 'flight-search/**', 'image-reviewers/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,13 +28,16 @@ jobs:
         run: node crypto-scanner/test.js
       - name: Test flight links
         run: node flight-search/test.js
-      # ماسح بينانس على الجذر (نفس الرابط القديم)، ومقارن الطيران على /flights/
+      - name: Test image reviewers
+        run: node image-reviewers/test.js
+      # ماسح بينانس على الجذر (نفس الرابط القديم)، ومقارن الطيران على /flights/، ولجنة تدقيق الصور على /reviewers/
       - name: Assemble site
         run: |
-          mkdir -p _site/flights
+          mkdir -p _site/flights _site/reviewers
           cp -r crypto-scanner/. _site/
           cp -r flight-search/. _site/flights/
-          rm -f _site/test.js _site/flights/test.js
+          cp -r image-reviewers/. _site/reviewers/
+          rm -f _site/test.js _site/flights/test.js _site/reviewers/test.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
