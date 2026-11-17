@@ -1,3 +1,4 @@
 .env
 __pycache__/
 state.json
+liquidity_state.json

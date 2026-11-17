@@ -1,0 +1,19 @@
+# تشغيل بوت السيولة 24/7 على سيرفر Linux (VPS) باستخدام systemd
+# 1) عدّل المسار واسم المستخدم تحت
+# 2) sudo cp liquidity-bot.service /etc/systemd/system/
+# 3) sudo systemctl daemon-reload && sudo systemctl enable --now liquidity-bot
+# 4) السجل: journalctl -u liquidity-bot -f
+[Unit]
+Description=Binance liquidity grab Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/restaurant-book/signal-bot
+ExecStart=/usr/bin/python3 liquidity_bot.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
