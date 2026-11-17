@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from bot import rsi
+from common import rsi
 
 BUY_RSI = 5.0
 SELL_RSI = 70.0

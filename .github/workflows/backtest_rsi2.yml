@@ -1,12 +1,13 @@
-name: Backtest daily 1% target
+name: Backtest RSI(2) daily
 
 on:
   workflow_dispatch:
   push:
     branches-ignore: [main]
     paths:
-      - signal-bot/backtest3.py
-      - .github/workflows/backtest3.yml
+      - signal-bot/backtest_rsi2.py
+      - signal-bot/rsi2.py
+      - .github/workflows/backtest_rsi2.yml
 
 jobs:
   backtest:
@@ -20,4 +21,4 @@ jobs:
       - run: pip install -q -r signal-bot/requirements.txt
       - name: Run backtest on real Binance data
         working-directory: signal-bot
-        run: python backtest3.py
+        run: python backtest_rsi2.py

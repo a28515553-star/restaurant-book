@@ -1,8 +1,8 @@
-name: Stoch RSI Telegram Bot
+name: RSI(2) Daily Telegram Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 * * * *"     # كل ساعة (الإشارة يومية، تطلع بعد إغلاق الشمعة اليومية 00:00 UTC)
   workflow_dispatch:
     inputs:
       test:
@@ -26,7 +26,7 @@ jobs:
           cache: pip
           cache-dependency-path: signal-bot/requirements.txt
       - run: pip install -q -r signal-bot/requirements.txt
-      # يحفظ الإشارات اللي انرسلت حتى ما تتكرر بين التشغيلات
+      # يحفظ الصفقات المفتوحة والإشارات المرسلة بين التشغيلات
       - uses: actions/cache/restore@v4
         with:
           path: signal-bot/state.json
@@ -38,14 +38,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SYMBOLS: ${{ vars.SYMBOLS }}
-          INTERVAL: ${{ vars.INTERVAL }}
-          LEVEL: ${{ vars.LEVEL }}
-          RSI_MAX: ${{ vars.RSI_MAX }}
-          MIN_VOLUME: ${{ vars.MIN_VOLUME }}
-          BREAKOUT_TF: ${{ vars.BREAKOUT_TF }}
-          TREND_FILTER: ${{ vars.TREND_FILTER }}
-          ZONE_TF: ${{ vars.ZONE_TF }}
-          R2_ENABLE: ${{ vars.R2_ENABLE }}
           R2_MIN_VOLUME: ${{ vars.R2_MIN_VOLUME }}
           TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test && '1' || '0' }}
         run: python stoch_bot.py
